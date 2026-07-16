@@ -23,6 +23,11 @@ type PptDeckPlan = {
   slides: SlidePlan[];
 };
 
+type GenerateSlideImageBody = {
+  deckPlan?: PptDeckPlan;
+  slide?: SlidePlan;
+};
+
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
@@ -45,37 +50,32 @@ Deno.serve(async (req) => {
     }
 
     const imageModel = Deno.env.get('OPENAI_IMAGE_MODEL') ?? 'gpt-image-2';
-    const body = (await req.json()) as { deckPlan?: PptDeckPlan };
+    const body = (await req.json()) as GenerateSlideImageBody;
     const deckPlan = body.deckPlan;
+    const slide = body.slide;
 
     if (!deckPlan || !Array.isArray(deckPlan.slides)) {
       return json({ error: 'deckPlan with slides is required.' }, 400);
     }
 
-    const images = [];
-    for (const slide of deckPlan.slides) {
-      const prompt = buildSlideImagePrompt(deckPlan, slide);
-      const referenceImage = deckPlan.request.styleImageDataUrl ?? deckPlan.request.styleImageUrl;
-      const b64 = referenceImage
-        ? await editImageFromReference(apiKey, imageModel, prompt, referenceImage)
-        : await generateImage(apiKey, imageModel, prompt);
-
-      images.push({
-        id: `image-${slide.id}`,
-        slideId: slide.id,
-        pageNumber: slide.pageNumber,
-        title: slide.title,
-        imageDataUrl: `data:image/png;base64,${b64}`,
-        prompt,
-        provider: 'openai',
-      });
+    if (!slide) {
+      return json({ error: 'slide is required. Generate one slide per function invocation.' }, 400);
     }
 
+    const prompt = buildSlideImagePrompt(deckPlan, slide);
+    const referenceImage = deckPlan.request.styleImageDataUrl ?? deckPlan.request.styleImageUrl;
+    const b64 = referenceImage
+      ? await editImageFromReference(apiKey, imageModel, prompt, referenceImage)
+      : await generateImage(apiKey, imageModel, prompt);
+
     return json({
-      id: `image-deck-${Date.now()}`,
-      deckPlanId: deckPlan.id,
-      createdAt: new Date().toISOString(),
-      images,
+      id: `image-${slide.id}`,
+      slideId: slide.id,
+      pageNumber: slide.pageNumber,
+      title: slide.title,
+      imageDataUrl: `data:image/png;base64,${b64}`,
+      prompt,
+      provider: 'openai',
     });
   } catch (error) {
     return json({ error: error instanceof Error ? error.message : 'Unknown error' }, 500);

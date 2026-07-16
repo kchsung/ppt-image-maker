@@ -81,19 +81,30 @@ export const pptMakerService: PptMakerService = {
 
   async generateSlideImages(deckPlan) {
     if (supabase) {
-      const { data, error } = await supabase.functions.invoke<GeneratedImageDeck>('generate-ppt-image-deck', {
-        body: { deckPlan },
-      });
+      const images: GeneratedSlideImage[] = [];
 
-      if (error) {
-        throw new Error(error.message);
+      for (const slide of deckPlan.slides) {
+        const { data, error } = await supabase.functions.invoke<GeneratedSlideImage>('generate-ppt-image-deck', {
+          body: { deckPlan, slide },
+        });
+
+        if (error) {
+          throw new Error(`Slide ${slide.pageNumber} image generation failed: ${error.message}`);
+        }
+
+        if (!data) {
+          throw new Error(`No image returned from Edge Function for slide ${slide.pageNumber}.`);
+        }
+
+        images.push(data);
       }
 
-      if (!data) {
-        throw new Error('No image deck returned from Edge Function.');
-      }
-
-      return data;
+      return {
+        id: `image-deck-${Date.now()}`,
+        deckPlanId: deckPlan.id,
+        createdAt: new Date().toISOString(),
+        images,
+      };
     }
 
     return createMockImageDeck(deckPlan);

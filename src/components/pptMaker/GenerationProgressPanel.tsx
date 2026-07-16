@@ -17,7 +17,7 @@ const steps = [
   {
     id: 'image',
     title: 'Generating images',
-    description: 'Creating presentation-ready slide images from the sample style.',
+    description: 'Creating presentation-ready slide images one slide at a time to avoid function timeouts.',
   },
   {
     id: 'document',
