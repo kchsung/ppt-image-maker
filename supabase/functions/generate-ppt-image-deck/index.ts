@@ -17,6 +17,8 @@ type PptDeckPlan = {
     audience: string;
     purpose: string;
     styleImageDataUrl?: string;
+    styleImageUrl?: string;
+    selectedTemplateId?: string;
   };
   slides: SlidePlan[];
 };
@@ -53,8 +55,9 @@ Deno.serve(async (req) => {
     const images = [];
     for (const slide of deckPlan.slides) {
       const prompt = buildSlideImagePrompt(deckPlan, slide);
-      const b64 = deckPlan.request.styleImageDataUrl
-        ? await editImageFromReference(apiKey, imageModel, prompt, deckPlan.request.styleImageDataUrl)
+      const referenceImage = deckPlan.request.styleImageDataUrl ?? deckPlan.request.styleImageUrl;
+      const b64 = referenceImage
+        ? await editImageFromReference(apiKey, imageModel, prompt, referenceImage)
         : await generateImage(apiKey, imageModel, prompt);
 
       images.push({
@@ -117,9 +120,9 @@ async function editImageFromReference(
   apiKey: string,
   model: string,
   prompt: string,
-  styleImageDataUrl: string,
+  referenceImage: string,
 ): Promise<string> {
-  const { bytes, mimeType } = decodeDataUrl(styleImageDataUrl);
+  const { bytes, mimeType } = await loadReferenceImage(referenceImage);
   const form = new FormData();
   form.append('model', model);
   form.append('prompt', prompt);
@@ -151,6 +154,22 @@ async function readImageB64(response: Response): Promise<string> {
   }
 
   return b64;
+}
+
+async function loadReferenceImage(reference: string): Promise<{ bytes: Uint8Array; mimeType: string }> {
+  if (reference.startsWith('data:')) {
+    return decodeDataUrl(reference);
+  }
+
+  const response = await fetch(reference);
+  if (!response.ok) {
+    throw new Error(`Failed to load template image: ${response.status}`);
+  }
+
+  return {
+    bytes: new Uint8Array(await response.arrayBuffer()),
+    mimeType: response.headers.get('content-type') ?? 'image/png',
+  };
 }
 
 function decodeDataUrl(dataUrl: string): { bytes: Uint8Array; mimeType: string } {

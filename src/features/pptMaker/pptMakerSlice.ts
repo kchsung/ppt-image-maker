@@ -1,4 +1,5 @@
 import { createAsyncThunk, createSlice, type PayloadAction } from '@reduxjs/toolkit';
+import { defaultPptTemplate, pptTemplates } from '@/mocks/pptTemplates.mock';
 import { defaultStyleReference } from '@/mocks/pptMaker.mock';
 import { enhancePptDocument } from '@/services/pptDocument.service';
 import { pptMakerService } from '@/services/pptMaker.service';
@@ -28,7 +29,9 @@ const initialState: PptMakerState = {
     audience: 'university students',
     purpose: 'summer school lecture',
     slideCount: 6,
-    styleNotes: defaultStyleReference.notes,
+    styleNotes: `${defaultStyleReference.notes} Use ${defaultPptTemplate.label}: ${defaultPptTemplate.description}`,
+    styleSourceMode: 'template',
+    selectedTemplateId: defaultPptTemplate.id,
     styleImageDataUrl: null,
   },
   deckPlan: null,
@@ -41,6 +44,11 @@ const initialState: PptMakerState = {
 };
 
 function toRequest(form: PptMakerFormState): PptMakerRequest {
+  const selectedTemplate = form.selectedTemplateId
+    ? pptTemplates.find((template) => template.id === form.selectedTemplateId)
+    : undefined;
+  const usesTemplate = form.styleSourceMode === 'template' && selectedTemplate;
+
   return {
     sourceText: form.sourceText,
     targetLanguage: form.targetLanguage,
@@ -49,9 +57,13 @@ function toRequest(form: PptMakerFormState): PptMakerRequest {
     slideCount: form.slideCount,
     styleReference: {
       ...defaultStyleReference,
+      name: usesTemplate ? selectedTemplate.name : defaultStyleReference.name,
       notes: form.styleNotes,
+      accentColorLabel: usesTemplate ? selectedTemplate.accentColorLabel : defaultStyleReference.accentColorLabel,
     },
-    styleImageDataUrl: form.styleImageDataUrl ?? undefined,
+    styleImageDataUrl: form.styleSourceMode === 'upload' ? (form.styleImageDataUrl ?? undefined) : undefined,
+    styleImageUrl: usesTemplate ? selectedTemplate.imageUrl : undefined,
+    selectedTemplateId: usesTemplate ? selectedTemplate.id : undefined,
   };
 }
 

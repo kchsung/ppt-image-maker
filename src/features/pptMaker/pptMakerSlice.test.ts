@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { generateDeckPlan, pptMakerReducer, resetDeckPlan, updateForm } from '@/features/pptMaker/pptMakerSlice';
 import { samplePptMakerRequest } from '@/mocks/pptMaker.mock';
+import { defaultPptTemplate } from '@/mocks/pptTemplates.mock';
 import type { PptMakerFormState } from '@/types/models/pptMaker.model';
 
 const sampleForm: PptMakerFormState = {
@@ -10,6 +11,8 @@ const sampleForm: PptMakerFormState = {
   purpose: samplePptMakerRequest.purpose,
   slideCount: samplePptMakerRequest.slideCount,
   styleNotes: samplePptMakerRequest.styleReference.notes,
+  styleSourceMode: 'template',
+  selectedTemplateId: defaultPptTemplate.id,
   styleImageDataUrl: null,
 };
 

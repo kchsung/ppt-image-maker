@@ -18,6 +18,19 @@ export interface StyleReference {
   accentColorLabel: string;
 }
 
+export type StyleSourceMode = 'template' | 'upload';
+
+export interface PptTemplate {
+  id: string;
+  templateNumber: number;
+  label: string;
+  name: string;
+  description: string;
+  accentColorLabel: string;
+  imageUrl: string;
+  storagePath: string;
+}
+
 export interface PptMakerRequest {
   sourceText: string;
   targetLanguage: TargetLanguage;
@@ -26,6 +39,8 @@ export interface PptMakerRequest {
   slideCount: number;
   styleReference: StyleReference;
   styleImageDataUrl?: string;
+  styleImageUrl?: string;
+  selectedTemplateId?: string;
 }
 
 export interface SlidePlan {
@@ -82,5 +97,7 @@ export interface PptMakerFormState {
   purpose: string;
   slideCount: number;
   styleNotes: string;
+  styleSourceMode: StyleSourceMode;
+  selectedTemplateId: string | null;
   styleImageDataUrl: string | null;
 }

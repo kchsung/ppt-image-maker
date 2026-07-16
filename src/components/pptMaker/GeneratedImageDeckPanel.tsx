@@ -39,7 +39,7 @@ export function GeneratedImageDeckPanel({
           <div className="flex min-h-52 flex-col items-center justify-center rounded-md border border-dashed border-border bg-surface-muted p-8 text-center">
             <Image className="mb-3 h-8 w-8 text-text-subtle" />
             <p className="text-sm font-semibold text-text-main">Generated images will appear here</p>
-            <p className="mt-1 text-sm text-text-subtle">Submit source text and a sample style image to start generation.</p>
+            <p className="mt-1 text-sm text-text-subtle">Submit source text with a template or uploaded style image to start generation.</p>
           </div>
         ) : (
           <div className="space-y-4">

@@ -14,7 +14,9 @@ import {
   updateForm,
 } from '@/features/pptMaker/pptMakerSlice';
 import { useAppDispatch, useAppSelector } from '@/hooks/redux';
+import { pptTemplates } from '@/mocks/pptTemplates.mock';
 import { pptExportService } from '@/services/pptExport.service';
+import type { PptTemplate } from '@/types/models/pptMaker.model';
 
 type PptMakerTab = 'input' | 'output';
 
@@ -38,6 +40,16 @@ export function PptMakerPage() {
       .catch(() => toast.error('PPT generation failed.'));
   };
 
+  const handleTemplateSelect = (template: PptTemplate) => {
+    dispatch(
+      updateForm({
+        styleSourceMode: 'template',
+        selectedTemplateId: template.id,
+        styleNotes: `Use ${template.label}: ${template.description}. Match its ${template.accentColorLabel} accent, clean white background, card flow, circular outcome area, footer, and page-number treatment.`,
+      }),
+    );
+  };
+
   const handleExportPptx = () => {
     if (!imageDeck) {
       return;
@@ -54,7 +66,7 @@ export function PptMakerPage() {
       <PageHeader
         eyebrow="QLEARN Startup"
         title="PPT Image Deck Maker"
-        description="Upload a sample slide style and paste source text. QLEARN will generate the slide images and prepare a PPTX output."
+        description="Choose a numbered template or upload a sample slide style, then paste source text. QLEARN will generate slide images and prepare a PPTX output."
         actions={
           <Button
             variant="secondary"
@@ -97,8 +109,10 @@ export function PptMakerPage() {
       {activeTab === 'input' ? (
         <PptMakerForm
           form={form}
+          templates={pptTemplates}
           isLoading={isGenerating}
           onChange={(patch) => dispatch(updateForm(patch))}
+          onTemplateSelect={handleTemplateSelect}
           onSubmit={handleSubmit}
         />
       ) : isGenerating ? (
