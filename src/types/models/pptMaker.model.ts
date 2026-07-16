@@ -68,7 +68,10 @@ export interface GeneratedSlideImage {
   slideId: string;
   pageNumber: number;
   title: string;
-  imageDataUrl: string;
+  imageDataUrl?: string;
+  imageUrl?: string;
+  storagePath?: string;
+  generationItemId?: string;
   prompt: string;
   provider: 'openai' | 'mock';
 }
@@ -76,8 +79,23 @@ export interface GeneratedSlideImage {
 export interface GeneratedImageDeck {
   id: string;
   deckPlanId: string;
+  generationJobId?: string;
   createdAt: string;
   images: GeneratedSlideImage[];
+}
+
+export interface GenerationJobItem {
+  id: string;
+  slideId: string;
+  pageNumber: number;
+}
+
+export interface GenerationJob {
+  id: string;
+  status: 'pending' | 'processing' | 'succeeded' | 'failed';
+  totalItems: number;
+  completedItems: number;
+  items: GenerationJobItem[];
 }
 
 export interface PptDocumentEnhancement {

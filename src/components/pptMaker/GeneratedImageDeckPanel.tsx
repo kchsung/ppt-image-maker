@@ -46,7 +46,11 @@ export function GeneratedImageDeckPanel({
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
               {imageDeck.images.map((image) => (
                 <figure key={image.id} className="overflow-hidden rounded-md border border-border bg-surface">
-                  <img src={image.imageDataUrl} alt={`Generated slide ${image.pageNumber}`} className="aspect-video w-full object-cover" />
+                  <img
+                    src={image.imageDataUrl ?? image.imageUrl}
+                    alt={`Generated slide ${image.pageNumber}`}
+                    className="aspect-video w-full object-cover"
+                  />
                   <figcaption className="flex items-center justify-between gap-2 px-3 py-2 text-xs text-text-subtle">
                     <span>Slide {image.pageNumber}</span>
                     <span>{image.provider}</span>

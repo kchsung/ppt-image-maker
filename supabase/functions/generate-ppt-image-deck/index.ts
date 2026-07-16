@@ -1,3 +1,5 @@
+import { createClient, type SupabaseClient } from 'npm:@supabase/supabase-js@2';
+
 type SlidePlan = {
   id: string;
   pageNumber: number;
@@ -26,6 +28,8 @@ type PptDeckPlan = {
 type GenerateSlideImageBody = {
   deckPlan?: PptDeckPlan;
   slide?: SlidePlan;
+  jobId?: string;
+  itemId?: string;
 };
 
 const corsHeaders = {
@@ -43,16 +47,25 @@ Deno.serve(async (req) => {
     return json({ error: 'Method not allowed' }, 405);
   }
 
+  let supabaseAdmin: SupabaseClient | null = null;
+  let jobId: string | undefined;
+  let itemId: string | undefined;
+
   try {
+    const body = (await req.json()) as GenerateSlideImageBody;
+    jobId = body.jobId;
+    itemId = body.itemId;
+    const deckPlan = body.deckPlan;
+    const slide = body.slide;
+    supabaseAdmin = createOptionalAdminClient();
+
     const apiKey = Deno.env.get('OPENAI_API_KEY');
     if (!apiKey) {
+      await markFailed(supabaseAdmin, jobId, itemId, 'OPENAI_API_KEY is not configured.');
       return json({ error: 'OPENAI_API_KEY is not configured.' }, 500);
     }
 
     const imageModel = Deno.env.get('OPENAI_IMAGE_MODEL') ?? 'gpt-image-2';
-    const body = (await req.json()) as GenerateSlideImageBody;
-    const deckPlan = body.deckPlan;
-    const slide = body.slide;
 
     if (!deckPlan || !Array.isArray(deckPlan.slides)) {
       return json({ error: 'deckPlan with slides is required.' }, 400);
@@ -62,22 +75,31 @@ Deno.serve(async (req) => {
       return json({ error: 'slide is required. Generate one slide per function invocation.' }, 400);
     }
 
+    await markProcessing(supabaseAdmin, jobId, itemId);
+
     const prompt = buildSlideImagePrompt(deckPlan, slide);
     const referenceImage = deckPlan.request.styleImageDataUrl ?? deckPlan.request.styleImageUrl;
     const b64 = referenceImage
       ? await editImageFromReference(apiKey, imageModel, prompt, referenceImage)
       : await generateImage(apiKey, imageModel, prompt);
+    const storageResult = await uploadGeneratedImage(supabaseAdmin, jobId, slide, b64);
+
+    await markSucceeded(supabaseAdmin, jobId, itemId, storageResult?.path);
 
     return json({
       id: `image-${slide.id}`,
       slideId: slide.id,
       pageNumber: slide.pageNumber,
       title: slide.title,
-      imageDataUrl: `data:image/png;base64,${b64}`,
+      imageDataUrl: storageResult ? undefined : `data:image/png;base64,${b64}`,
+      imageUrl: storageResult?.publicUrl,
+      storagePath: storageResult?.path,
+      generationItemId: itemId,
       prompt,
       provider: 'openai',
     });
   } catch (error) {
+    await markFailed(supabaseAdmin, jobId, itemId, error instanceof Error ? error.message : 'Unknown error');
     return json({ error: error instanceof Error ? error.message : 'Unknown error' }, 500);
   }
 });
@@ -185,6 +207,163 @@ function decodeDataUrl(dataUrl: string): { bytes: Uint8Array; mimeType: string }
   }
 
   return { bytes, mimeType: match[1] || 'image/png' };
+}
+
+function createOptionalAdminClient(): SupabaseClient | null {
+  const supabaseUrl = Deno.env.get('SUPABASE_URL');
+  const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+
+  if (!supabaseUrl || !serviceRoleKey) {
+    return null;
+  }
+
+  return createClient(supabaseUrl, serviceRoleKey);
+}
+
+async function markProcessing(supabase: SupabaseClient | null, jobId?: string, itemId?: string): Promise<void> {
+  if (!supabase || !jobId) {
+    return;
+  }
+
+  await supabase
+    .from('generation_jobs')
+    .update({
+      status: 'processing',
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', jobId);
+
+  if (!itemId) {
+    return;
+  }
+
+  await supabase
+    .from('generation_items')
+    .update({
+      status: 'processing',
+      attempts: 1,
+      error_message: null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', itemId);
+}
+
+async function markSucceeded(
+  supabase: SupabaseClient | null,
+  jobId?: string,
+  itemId?: string,
+  outputPath?: string,
+): Promise<void> {
+  if (!supabase || !jobId) {
+    return;
+  }
+
+  if (itemId) {
+    await supabase
+      .from('generation_items')
+      .update({
+        status: 'succeeded',
+        output_path: outputPath,
+        error_message: null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', itemId);
+  }
+
+  const { count } = await supabase
+    .from('generation_items')
+    .select('id', { count: 'exact', head: true })
+    .eq('job_id', jobId)
+    .eq('status', 'succeeded');
+
+  const { data: job } = await supabase
+    .from('generation_jobs')
+    .select('total_items')
+    .eq('id', jobId)
+    .single();
+
+  const completedItems = count ?? 0;
+  const totalItems = Number(job?.total_items ?? 0);
+  const isComplete = totalItems > 0 && completedItems >= totalItems;
+
+  await supabase
+    .from('generation_jobs')
+    .update({
+      status: isComplete ? 'succeeded' : 'processing',
+      completed_items: completedItems,
+      progress: totalItems > 0 ? Math.round((completedItems / totalItems) * 100) : 0,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', jobId);
+}
+
+async function markFailed(
+  supabase: SupabaseClient | null,
+  jobId: string | undefined,
+  itemId: string | undefined,
+  message: string,
+): Promise<void> {
+  if (!supabase || !jobId) {
+    return;
+  }
+
+  await supabase
+    .from('generation_jobs')
+    .update({
+      status: 'failed',
+      error_message: message,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', jobId);
+
+  if (!itemId) {
+    return;
+  }
+
+  await supabase
+    .from('generation_items')
+    .update({
+      status: 'failed',
+      error_message: message,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', itemId);
+}
+
+async function uploadGeneratedImage(
+  supabase: SupabaseClient | null,
+  jobId: string | undefined,
+  slide: SlidePlan,
+  b64: string,
+): Promise<{ path: string; publicUrl: string } | null> {
+  if (!supabase || !jobId) {
+    return null;
+  }
+
+  const path = `${jobId}/slide-${String(slide.pageNumber).padStart(2, '0')}.png`;
+  const { error } = await supabase.storage
+    .from('ppt-generations')
+    .upload(path, base64ToBytes(b64), {
+      contentType: 'image/png',
+      upsert: true,
+    });
+
+  if (error) {
+    throw error;
+  }
+
+  const { data } = supabase.storage.from('ppt-generations').getPublicUrl(path);
+  return { path: `ppt-generations/${path}`, publicUrl: data.publicUrl };
+}
+
+function base64ToBytes(b64: string): Uint8Array {
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+
+  return bytes;
 }
 
 function json(data: unknown, status = 200): Response {

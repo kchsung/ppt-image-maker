@@ -15,10 +15,21 @@ export const pptExportService: PptExportService = {
     pptx.title = enhancement?.title ?? fileName.replace(/\.pptx$/i, '');
     pptx.company = 'QLEARN';
 
-    deck.images
+    const sortedImages = deck.images.slice().sort((left, right) => left.pageNumber - right.pageNumber);
+    const imagesWithData = await Promise.all(
+      sortedImages.map(async (image) => ({
+        ...image,
+        imageDataUrl: image.imageDataUrl ?? (image.imageUrl ? await imageUrlToDataUrl(image.imageUrl) : undefined),
+      })),
+    );
+
+    imagesWithData
       .slice()
-      .sort((left, right) => left.pageNumber - right.pageNumber)
       .forEach((image) => {
+        if (!image.imageDataUrl) {
+          throw new Error(`Slide ${image.pageNumber} does not include image data.`);
+        }
+
         const slide = pptx.addSlide();
         const note = enhancement?.speakerNotes.find((item) => item.pageNumber === image.pageNumber)?.note;
         slide.background = { color: 'FFFFFF' };
@@ -37,3 +48,24 @@ export const pptExportService: PptExportService = {
     await pptx.writeFile({ fileName: enhancement?.fileName ?? fileName });
   },
 };
+
+async function imageUrlToDataUrl(imageUrl: string): Promise<string> {
+  const response = await fetch(imageUrl);
+  if (!response.ok) {
+    throw new Error(`Failed to load generated slide image: ${response.status}`);
+  }
+
+  const blob = await response.blob();
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('Failed to convert generated slide image.'));
+    reader.onload = () => {
+      if (typeof reader.result === 'string') {
+        resolve(reader.result);
+      } else {
+        reject(new Error('Generated slide image conversion returned an invalid result.'));
+      }
+    };
+    reader.readAsDataURL(blob);
+  });
+}

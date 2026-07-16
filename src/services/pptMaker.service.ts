@@ -3,6 +3,7 @@ import { supabase } from '@/lib/supabase';
 import type {
   GeneratedImageDeck,
   GeneratedSlideImage,
+  GenerationJob,
   PptDeckPlan,
   PptMakerRequest,
   SlidePlan,
@@ -79,13 +80,35 @@ export const pptMakerService: PptMakerService = {
     } satisfies PptDeckPlan;
   },
 
+  async createGenerationJob(deckPlan) {
+    if (!supabase) {
+      return null;
+    }
+
+    const { data, error } = await supabase.functions.invoke<GenerationJob>('create-ppt-generation-job', {
+      body: { deckPlan },
+    });
+
+    if (error) {
+      throw new Error(`PPT generation job registration failed: ${error.message}`);
+    }
+
+    if (!data) {
+      throw new Error('No generation job returned from Edge Function.');
+    }
+
+    return data;
+  },
+
   async generateSlideImages(deckPlan) {
     if (supabase) {
+      const job = await this.createGenerationJob(deckPlan);
       const images: GeneratedSlideImage[] = [];
 
       for (const slide of deckPlan.slides) {
+        const item = job?.items.find((jobItem) => jobItem.slideId === slide.id);
         const { data, error } = await supabase.functions.invoke<GeneratedSlideImage>('generate-ppt-image-deck', {
-          body: { deckPlan, slide },
+          body: { deckPlan, slide, jobId: job?.id, itemId: item?.id },
         });
 
         if (error) {
@@ -100,8 +123,9 @@ export const pptMakerService: PptMakerService = {
       }
 
       return {
-        id: `image-deck-${Date.now()}`,
+        id: job?.id ? `image-deck-${job.id}` : `image-deck-${Date.now()}`,
         deckPlanId: deckPlan.id,
+        generationJobId: job?.id,
         createdAt: new Date().toISOString(),
         images,
       };

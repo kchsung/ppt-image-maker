@@ -1,5 +1,6 @@
 import type {
   GeneratedImageDeck,
+  GenerationJob,
   PptDeckPlan,
   PptDocumentEnhancement,
   PptMakerRequest,
@@ -7,6 +8,7 @@ import type {
 
 export interface PptMakerService {
   generateDeckPlan(request: PptMakerRequest): Promise<PptDeckPlan>;
+  createGenerationJob(deckPlan: PptDeckPlan): Promise<GenerationJob | null>;
   generateSlideImages(deckPlan: PptDeckPlan): Promise<GeneratedImageDeck>;
 }
 
