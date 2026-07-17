@@ -14,6 +14,16 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
+const CLAUDE_BETA_HEADER = 'code-execution-2025-08-25,skills-2025-10-02,files-api-2025-04-14';
+
+const QLEARN_PRESENTATION_SKILL_GUIDE = [
+  'Use QLEARN/THE GPC presentation rules together with the official pptx skill.',
+  'Prefer editable PPT text boxes over baked-in text whenever PowerPoint is generated later.',
+  'Use a white background, navy titles, orange accent bar, restrained card grids, summary pill, and fixed footer/page number rhythm.',
+  'Avoid placeholder dots, ellipses, mixed-language fragments, tiny unreadable text, and text that overflows cards.',
+  'Keep slide messages decision-oriented: title, subtitle, 3-5 crisp labels, takeaway, and speaker note should reinforce one idea.',
+].join('\n');
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
@@ -30,6 +40,8 @@ Deno.serve(async (req) => {
     }
 
     const model = Deno.env.get('CLAUDE_MODEL') ?? 'claude-sonnet-5';
+    const customSkillId = Deno.env.get('CLAUDE_PRESENTATION_SKILL_ID');
+    const customSkillVersion = Deno.env.get('CLAUDE_PRESENTATION_SKILL_VERSION') ?? 'latest';
     const body = (await req.json()) as { imageDeck?: GeneratedImageDeck };
     const imageDeck = body.imageDeck;
 
@@ -42,13 +54,21 @@ Deno.serve(async (req) => {
       headers: {
         'x-api-key': apiKey,
         'anthropic-version': '2023-06-01',
+        'anthropic-beta': CLAUDE_BETA_HEADER,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
         model,
-        max_tokens: 1400,
+        max_tokens: 4096,
+        container: {
+          skills: [
+            { type: 'anthropic', skill_id: 'pptx', version: 'latest' },
+            ...(customSkillId ? [{ type: 'custom', skill_id: customSkillId, version: customSkillVersion }] : []),
+          ],
+        },
+        tools: [{ type: 'code_execution_20250825', name: 'code_execution' }],
         system:
-          'You are a senior presentation editor. Create concise PPT document metadata for an image-based deck. Return strict JSON only, with no markdown fences.',
+          'You are a senior presentation editor using Claude Skills. Use the official pptx skill and code execution capability as presentation-layout expertise, and apply the QLEARN presentation skill guide. Return strict JSON only, with no markdown fences.',
         messages: [
           {
             role: 'user',
@@ -57,6 +77,9 @@ Deno.serve(async (req) => {
                 type: 'text',
                 text: JSON.stringify({
                   task: 'Enhance generated slide images into a PPT document plan.',
+                  instruction:
+                    'Use the official Anthropic pptx skill plus the QLEARN presentation guide to optimize the final editable PPTX structure. Do not create or attach a PPTX file in this request; the app exports PPTX later. Return only metadata JSON.',
+                  qlearnPresentationSkillGuide: QLEARN_PRESENTATION_SKILL_GUIDE,
                   outputContract: {
                     title: 'string',
                     fileName: 'string ending in .pptx',

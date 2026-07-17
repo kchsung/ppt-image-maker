@@ -146,6 +146,9 @@ Path:
 Responsibilities:
 
 - Call Claude API.
+- Include the official Anthropic `pptx` skill through `container.skills`.
+- Enable Claude code execution for PPTX/layout reasoning.
+- Apply the QLEARN/THE GPC presentation skill guide in the prompt.
 - Generate PPT title, file name, speaker notes, and QA checklist.
 
 ## Environment Variables
@@ -165,6 +168,8 @@ OPENAI_API_KEY=
 OPENAI_IMAGE_MODEL=gpt-image-2
 CLAUDE_API_KEY=
 CLAUDE_MODEL=claude-sonnet-5
+CLAUDE_PRESENTATION_SKILL_ID=
+CLAUDE_PRESENTATION_SKILL_VERSION=latest
 ```
 
 Required:
@@ -176,8 +181,12 @@ Optional:
 
 - `OPENAI_IMAGE_MODEL`
 - `CLAUDE_MODEL`
+- `CLAUDE_PRESENTATION_SKILL_ID`
+- `CLAUDE_PRESENTATION_SKILL_VERSION`
 
 If model secrets are not set, the Edge Functions use their default values.
+
+`enhance-ppt-document` always includes the official Anthropic `pptx` skill. If a custom QLEARN/THE GPC presentation skill is uploaded to Claude Platform, set `CLAUDE_PRESENTATION_SKILL_ID` to include it in the same request.
 
 Important:
 
