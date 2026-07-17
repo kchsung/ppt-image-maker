@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createSlideTitle, extractKeywords, splitIntoSlideSeeds } from '@/utils/pptMaker';
+import { createSlideTitle, extractKeywords, splitIntoSlideSeeds, summarizeText } from '@/utils/pptMaker';
 
 describe('pptMaker utilities', () => {
   it('splits source text into the requested number of slide seeds', () => {
@@ -21,5 +21,15 @@ describe('pptMaker utilities', () => {
   it('creates a language-aware slide title', () => {
     expect(createSlideTitle('AI judgment creates better workflow', 'English', 2)).toContain('Moves From');
     expect(createSlideTitle('AI 판단과 실행 기준을 정리합니다', 'Korean', 2)).toContain('전환하기');
+  });
+
+  it('does not add ellipsis when summarizing slide text', () => {
+    const summary = summarizeText(
+      'This is a very long sentence that should be shortened without adding trailing ellipsis or placeholder dots.',
+      45,
+    );
+
+    expect(summary).not.toContain('...');
+    expect(summary).not.toContain('…');
   });
 });

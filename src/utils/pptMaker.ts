@@ -18,8 +18,10 @@ const EN_STOP_WORDS = new Set([
   'must',
 ]);
 
+const SENTENCE_PATTERN = /[^.!?。！？]+[.!?。！？]?/g;
+
 export function normalizeSourceText(sourceText: string): string {
-  return sourceText.replace(/\s+/g, ' ').trim();
+  return stripEllipsis(sourceText).replace(/\s+/g, ' ').trim();
 }
 
 export function splitIntoSlideSeeds(sourceText: string, slideCount: number): string[] {
@@ -28,7 +30,7 @@ export function splitIntoSlideSeeds(sourceText: string, slideCount: number): str
     return [];
   }
 
-  const sentenceMatches = normalized.match(/[^.!?。！？]+[.!?。！？]?/g) ?? [normalized];
+  const sentenceMatches = normalized.match(SENTENCE_PATTERN) ?? [normalized];
   const sentences = sentenceMatches.map((sentence) => sentence.trim()).filter(Boolean);
   const safeCount = Math.max(1, Math.min(slideCount, 20));
   const groups: string[] = Array.from({ length: safeCount }, () => '');
@@ -42,11 +44,11 @@ export function splitIntoSlideSeeds(sourceText: string, slideCount: number): str
 }
 
 export function extractKeywords(text: string, limit = 4): string[] {
-  const words = text
+  const words = normalizeSourceText(text)
     .replace(/[^\p{L}\p{N}\s-]/gu, ' ')
     .split(/\s+/)
     .map((word) => word.trim())
-    .filter((word) => word.length > 2)
+    .filter((word) => word.length > 1)
     .filter((word) => !EN_STOP_WORDS.has(word.toLowerCase()));
 
   const counts = new Map<string, number>();
@@ -68,6 +70,7 @@ export function selectArchetype(pageNumber: number, totalSlides: number): SlideA
   if (pageNumber === totalSlides) {
     return 'closing';
   }
+
   const flow: SlideArchetype[] = ['section-opener', 'card-grid', 'comparison', 'process', 'before-after', 'case-dashboard'];
   return flow[(pageNumber - 2) % flow.length];
 }
@@ -90,9 +93,39 @@ export function summarizeText(seed: string, maxLength = 150): string {
   if (trimmed.length <= maxLength) {
     return trimmed;
   }
-  return `${trimmed.slice(0, maxLength).trim()}...`;
+
+  const sentences = trimmed.match(SENTENCE_PATTERN)?.map((sentence) => sentence.trim()).filter(Boolean) ?? [];
+  const completeSentence = sentences.find((sentence) => sentence.length <= maxLength);
+  if (completeSentence) {
+    return stripEllipsis(completeSentence);
+  }
+
+  const words = trimmed.split(/\s+/);
+  const selected: string[] = [];
+  for (const word of words) {
+    const next = [...selected, word].join(' ');
+    if (next.length > maxLength) {
+      break;
+    }
+    selected.push(word);
+  }
+
+  return stripEllipsis(selected.join(' ') || trimmed.slice(0, maxLength).trim());
+}
+
+export function validateSlideText(value: string, language: TargetLanguage): string {
+  const cleaned = stripEllipsis(value);
+  if (language === 'Korean') {
+    return cleaned.replace(/\b(Designed for|Turn|Insight|Action|Idea)\b/gi, '').replace(/\s+/g, ' ').trim();
+  }
+
+  return cleaned;
 }
 
 export function titleCase(value: string): string {
   return value.replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+export function stripEllipsis(value: string): string {
+  return value.replace(/\.{2,}|…/g, '').replace(/\s+/g, ' ').trim();
 }

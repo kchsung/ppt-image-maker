@@ -9,6 +9,8 @@ describe('pptMakerService', () => {
     expect(deck.slides).toHaveLength(samplePptMakerRequest.slideCount);
     expect(deck.slides[0].archetype).toBe('cover');
     expect(deck.slides[0].imagePrompt).toContain('Create slide 1');
+    expect(deck.slides[0].imagePrompt).toContain('must not contain readable words');
+    expect(deck.slides[0].imagePrompt).not.toContain('Required labels');
     expect(deck.slides[0].imagePrompt).toContain(samplePptMakerRequest.audience);
   });
 

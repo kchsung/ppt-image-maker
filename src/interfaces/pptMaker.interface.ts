@@ -13,5 +13,10 @@ export interface PptMakerService {
 }
 
 export interface PptExportService {
-  exportImageDeck(deck: GeneratedImageDeck, fileName?: string, enhancement?: PptDocumentEnhancement): Promise<void>;
+  exportImageDeck(
+    deck: GeneratedImageDeck,
+    deckPlan?: PptDeckPlan | null,
+    fileName?: string,
+    enhancement?: PptDocumentEnhancement,
+  ): Promise<void>;
 }

@@ -23,7 +23,7 @@ type PptMakerTab = 'input' | 'output';
 export function PptMakerPage() {
   const dispatch = useAppDispatch();
   const [activeTab, setActiveTab] = useState<PptMakerTab>('input');
-  const { form, imageDeck, documentEnhancement, status, imageStatus, documentStatus, error } = useAppSelector(
+  const { form, deckPlan, imageDeck, documentEnhancement, status, imageStatus, documentStatus, error } = useAppSelector(
     (state) => state.pptMaker,
   );
   const isGenerating = status === 'loading' || imageStatus === 'loading' || documentStatus === 'loading';
@@ -56,7 +56,12 @@ export function PptMakerPage() {
     }
 
     void pptExportService
-      .exportImageDeck(imageDeck, documentEnhancement?.fileName ?? 'qlearn-image-deck.pptx', documentEnhancement ?? undefined)
+      .exportImageDeck(
+        imageDeck,
+        deckPlan,
+        documentEnhancement?.fileName ?? 'qlearn-editable-deck.pptx',
+        documentEnhancement ?? undefined,
+      )
       .then(() => toast.success('PPTX export started.'))
       .catch(() => toast.error('PPTX export failed.'));
   };

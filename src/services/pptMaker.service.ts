@@ -14,24 +14,24 @@ import {
   selectArchetype,
   splitIntoSlideSeeds,
   summarizeText,
+  validateSlideText,
 } from '@/utils/pptMaker';
 import { getSupabaseFunctionErrorMessage } from '@/utils/supabaseFunctionError';
 
 function createImagePrompt(request: PptMakerRequest, slide: Omit<SlidePlan, 'imagePrompt'>): string {
   return [
-    `Create slide ${slide.pageNumber} of the same presentation deck.`,
+    `Create slide ${slide.pageNumber} visual background for the same presentation deck.`,
     `Style: ${request.styleReference.notes}`,
     `Use ${request.styleReference.primaryColorLabel} as the primary color and ${request.styleReference.accentColorLabel} for emphasis.`,
     `Audience: ${request.audience}`,
     `Purpose: ${request.purpose}`,
     `Language: ${request.targetLanguage}`,
-    `Main message: ${slide.mainMessage}`,
-    `Title: "${slide.title}"`,
-    `Subtitle: "${slide.subtitle}"`,
     `Main visual: ${slide.archetype}`,
-    `Required labels: ${slide.labels.join(', ')}`,
-    `Bottom takeaway: "${slide.takeaway}"`,
-    'Keep text readable. Do not add unrelated text. Preserve page number and footer consistency.',
+    `Concepts to represent visually without text: ${slide.labels.join(', ')}`,
+    'Editable PPT text will be added later, so the image must not contain readable words.',
+    'Do not render titles, labels, body text, footer text, logos, page numbers, captions, or placeholder dots.',
+    'Use abstract diagrams, icons, cards, lines, dashboards, or shapes only.',
+    'Leave clean whitespace where editable PPT text can be placed later.',
   ].join('\n');
 }
 
@@ -43,16 +43,17 @@ export const pptMakerService: PptMakerService = {
     const slides: SlidePlan[] = seeds.map((seed, index) => {
       const pageNumber = index + 1;
       const archetype = selectArchetype(pageNumber, totalSlides);
-      const labels = extractKeywords(seed, archetype === 'cover' ? 3 : 5);
-      const mainMessage = summarizeText(seed, 140);
-      const title = createSlideTitle(seed, request.targetLanguage, pageNumber);
+      const rawLabels = extractKeywords(seed, archetype === 'cover' ? 3 : 5);
+      const labels = rawLabels.map((label) => validateSlideText(label, request.targetLanguage)).filter(Boolean);
+      const mainMessage = validateSlideText(summarizeText(seed, 140), request.targetLanguage);
+      const title = validateSlideText(createSlideTitle(seed, request.targetLanguage, pageNumber), request.targetLanguage);
       const subtitle =
         request.targetLanguage === 'Korean'
-          ? `${request.audience} 대상 ${request.purpose} 장표`
+          ? `${request.audience} 대상 ${request.purpose} 발표 자료`
           : `Designed for ${request.audience} in a ${request.purpose}.`;
       const takeaway =
         request.targetLanguage === 'Korean'
-          ? `${labels[0] ?? '핵심'}을 실행 가능한 판단으로 연결합니다.`
+          ? `${labels[0] ?? '핵심'}을 실행 가능한 판단 기준으로 연결합니다.`
           : `Turn ${labels[0] ?? 'the idea'} into a clear decision the audience can remember.`;
 
       const slideWithoutPrompt: Omit<SlidePlan, 'imagePrompt'> = {
@@ -61,9 +62,9 @@ export const pptMakerService: PptMakerService = {
         archetype,
         mainMessage,
         title,
-        subtitle,
+        subtitle: validateSlideText(subtitle, request.targetLanguage),
         labels,
-        takeaway,
+        takeaway: validateSlideText(takeaway, request.targetLanguage),
       };
 
       return {
@@ -168,9 +169,8 @@ function createMockSlideSvg(slide: SlidePlan): string {
       const x = startX + index * (cardWidth + cardGap);
       return `
         <rect x="${x}" y="500" width="${cardWidth}" height="210" rx="18" fill="${index % 2 === 0 ? '#EFF5FE' : '#FEF7EE'}"/>
-        <text x="${x + 28}" y="570" font-size="34" font-weight="700" fill="#0B2454">${escapeXml(label)}</text>
-        <rect x="${x + 28}" y="598" width="70" height="8" rx="4" fill="#FE6621"/>
-        <text x="${x + 28}" y="660" font-size="22" fill="#333333">Presentation-ready point</text>
+        <rect x="${x + 28}" y="540" width="72" height="72" rx="36" fill="#FFFFFF"/>
+        <circle cx="${x + 64}" cy="576" r="18" fill="${index % 2 === 0 ? '#0B2454' : '#FE6621'}" opacity="0.86"/>
       `;
     })
     .join('');
@@ -179,23 +179,11 @@ function createMockSlideSvg(slide: SlidePlan): string {
     <svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080">
       <rect width="1920" height="1080" fill="#FFFFFF"/>
       <rect x="88" y="92" width="12" height="150" rx="6" fill="#FE6621"/>
-      <text x="130" y="150" font-family="Arial, sans-serif" font-size="58" font-weight="700" fill="#0B2454">${escapeXml(slide.title)}</text>
-      <text x="130" y="220" font-family="Arial, sans-serif" font-size="28" fill="#6B7280">${escapeXml(slide.subtitle)}</text>
-      <text x="130" y="340" font-family="Arial, sans-serif" font-size="32" fill="#333333">${escapeXml(slide.mainMessage)}</text>
+      <circle cx="1470" cy="470" r="210" fill="#EFF5FE" stroke="#0B2454" stroke-width="6" opacity="0.65"/>
+      <path d="M280 760 H1580" stroke="#0B2454" stroke-width="8" opacity="0.55"/>
       ${cards}
       <rect x="90" y="900" width="1620" height="90" rx="45" fill="#FFFFFF" stroke="#0B2454" stroke-width="3"/>
-      <text x="140" y="956" font-family="Arial, sans-serif" font-size="28" font-weight="700" fill="#0B2454">${escapeXml(slide.takeaway)}</text>
       <circle cx="1800" cy="945" r="42" fill="#0B2454"/>
-      <text x="1800" y="960" text-anchor="middle" font-family="Arial, sans-serif" font-size="30" font-weight="700" fill="#FFFFFF">${slide.pageNumber}</text>
     </svg>
   `;
-}
-
-function escapeXml(value: string): string {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&apos;');
 }

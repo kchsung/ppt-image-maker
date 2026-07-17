@@ -108,14 +108,14 @@ function buildSlideImagePrompt(deckPlan: PptDeckPlan, slide: SlidePlan): string 
   return [
     slide.imagePrompt,
     '',
-    'Create a polished 16:9 presentation slide image.',
-    'The output must look like a finished slide, not a poster or illustration.',
-    'Preserve exact labels, title, page number, and terminology.',
-    'Use clean layout, readable text, and consistent footer/page-number system.',
+    'Create a polished 16:9 presentation visual background.',
+    'Do not include readable text, letters, numbers, captions, logos, page numbers, or placeholder dots.',
+    'Represent the slide idea using editable-PPT-friendly visual structure only: cards, icons, flow lines, dashboards, shapes, diagrams, and whitespace.',
+    'Leave clear areas for editable title, subtitle, body labels, takeaway, footer, and page number to be added in PowerPoint.',
     `Audience: ${deckPlan.request.audience}`,
     `Purpose: ${deckPlan.request.purpose}`,
-    `Language: ${deckPlan.request.targetLanguage}`,
-    `Page number: ${slide.pageNumber}`,
+    `Language context: ${deckPlan.request.targetLanguage}`,
+    `Slide concept: ${slide.mainMessage}`,
   ].join('\n');
 }
 
