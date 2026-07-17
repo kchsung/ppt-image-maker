@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { NavLink } from 'react-router-dom';
-import { FileImage, LayoutDashboard } from 'lucide-react';
+import { FileImage, LayoutDashboard, ShieldCheck } from 'lucide-react';
 import { cn } from '@/lib/cn';
 
 interface AppLayoutProps {
@@ -27,6 +27,18 @@ export function AppLayout({ children }: AppLayoutProps) {
           >
             <FileImage className="h-4 w-4" />
             PPT Maker
+          </NavLink>
+          <NavLink
+            to="/ppt-admin"
+            className={({ isActive }) =>
+              cn(
+                'flex items-center gap-2 rounded-md px-3 py-2 text-sm font-semibold text-text-subtle',
+                isActive && 'bg-primary-muted text-primary',
+              )
+            }
+          >
+            <ShieldCheck className="h-4 w-4" />
+            Admin
           </NavLink>
         </nav>
       </aside>

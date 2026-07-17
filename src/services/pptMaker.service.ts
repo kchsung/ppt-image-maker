@@ -165,7 +165,7 @@ function createMockSlideSvg(slide: SlidePlan): string {
   const cardGap = 24;
   const startX = 90;
   const cards = labels
-    .map((label, index) => {
+    .map((_, index) => {
       const x = startX + index * (cardWidth + cardGap);
       return `
         <rect x="${x}" y="500" width="${cardWidth}" height="210" rx="18" fill="${index % 2 === 0 ? '#EFF5FE' : '#FEF7EE'}"/>
