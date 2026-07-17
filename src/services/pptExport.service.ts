@@ -11,7 +11,7 @@ import type PptxGenJS from 'pptxgenjs';
 
 const SLIDE_W = 13.333;
 const SLIDE_H = 7.5;
-const FONT_FACE = 'Arial';
+const FONT_FACE = 'Pretendard';
 
 const C = {
   bg: 'FFFFFF',

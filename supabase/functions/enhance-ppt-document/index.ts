@@ -108,7 +108,7 @@ Deno.serve(async (req) => {
       throw new Error(payload?.error?.message ?? 'OpenAI document enhancement failed.');
     }
 
-    const outputText = payload?.output_text;
+    const outputText = extractOutputText(payload);
     if (typeof outputText !== 'string') {
       throw new Error('OpenAI response did not include output_text.');
     }
@@ -127,4 +127,49 @@ function json(data: unknown, status = 200): Response {
       'Content-Type': 'application/json',
     },
   });
+}
+
+function extractOutputText(payload: Record<string, unknown>): string | null {
+  if (typeof payload.output_text === 'string') {
+    return payload.output_text;
+  }
+
+  const output = payload.output;
+  if (!Array.isArray(output)) {
+    return null;
+  }
+
+  for (const item of output) {
+    if (!item || typeof item !== 'object') {
+      continue;
+    }
+
+    const content = (item as { content?: unknown }).content;
+    if (!Array.isArray(content)) {
+      continue;
+    }
+
+    for (const part of content) {
+      if (!part || typeof part !== 'object') {
+        continue;
+      }
+
+      const text = (part as { text?: unknown; output_text?: unknown; json?: unknown }).text;
+      if (typeof text === 'string') {
+        return text;
+      }
+
+      const outputText = (part as { output_text?: unknown }).output_text;
+      if (typeof outputText === 'string') {
+        return outputText;
+      }
+
+      const json = (part as { json?: unknown }).json;
+      if (json && typeof json === 'object') {
+        return JSON.stringify(json);
+      }
+    }
+  }
+
+  return null;
 }
