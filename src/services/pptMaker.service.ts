@@ -15,6 +15,7 @@ import {
   splitIntoSlideSeeds,
   summarizeText,
 } from '@/utils/pptMaker';
+import { getSupabaseFunctionErrorMessage } from '@/utils/supabaseFunctionError';
 
 function createImagePrompt(request: PptMakerRequest, slide: Omit<SlidePlan, 'imagePrompt'>): string {
   return [
@@ -90,7 +91,7 @@ export const pptMakerService: PptMakerService = {
     });
 
     if (error) {
-      throw new Error(`PPT generation job registration failed: ${error.message}`);
+      throw new Error(`PPT generation job registration failed: ${await getSupabaseFunctionErrorMessage(error)}`);
     }
 
     if (!data) {
@@ -112,7 +113,9 @@ export const pptMakerService: PptMakerService = {
         });
 
         if (error) {
-          throw new Error(`Slide ${slide.pageNumber} image generation failed: ${error.message}`);
+          throw new Error(
+            `Slide ${slide.pageNumber} image generation failed: ${await getSupabaseFunctionErrorMessage(error)}`,
+          );
         }
 
         if (!data) {

@@ -1,5 +1,6 @@
 import { supabase } from '@/lib/supabase';
 import type { GeneratedImageDeck, PptDocumentEnhancement } from '@/types/models/pptMaker.model';
+import { getSupabaseFunctionErrorMessage } from '@/utils/supabaseFunctionError';
 
 export async function enhancePptDocument(imageDeck: GeneratedImageDeck): Promise<PptDocumentEnhancement> {
   if (supabase) {
@@ -8,7 +9,7 @@ export async function enhancePptDocument(imageDeck: GeneratedImageDeck): Promise
     });
 
     if (error) {
-      throw new Error(error.message);
+      throw new Error(await getSupabaseFunctionErrorMessage(error));
     }
 
     if (!data) {
