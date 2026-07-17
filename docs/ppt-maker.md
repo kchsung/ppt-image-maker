@@ -145,7 +145,7 @@ Path:
 
 Responsibilities:
 
-- Call OpenAI text API.
+- Call Claude API.
 - Generate PPT title, file name, speaker notes, and QA checklist.
 
 ## Environment Variables
@@ -163,17 +163,19 @@ Supabase Edge Function secrets:
 ```dotenv
 OPENAI_API_KEY=
 OPENAI_IMAGE_MODEL=gpt-image-2
-OPENAI_TEXT_MODEL=gpt-5.6
+CLAUDE_API_KEY=
+CLAUDE_MODEL=claude-sonnet-5
 ```
 
 Required:
 
 - `OPENAI_API_KEY`
+- `CLAUDE_API_KEY`
 
 Optional:
 
 - `OPENAI_IMAGE_MODEL`
-- `OPENAI_TEXT_MODEL`
+- `CLAUDE_MODEL`
 
 If model secrets are not set, the Edge Functions use their default values.
 
@@ -190,6 +192,13 @@ Set OpenAI key from local `.env`:
 supabase login
 $openAiKey = (Get-Content .env | Where-Object { $_ -match '^OPENAI_API_KEY=' } | Select-Object -First 1) -replace '^OPENAI_API_KEY=', ''
 supabase secrets set "OPENAI_API_KEY=$openAiKey" --project-ref vhktpqsxzcihwijnfaaf
+```
+
+Set Claude key from local `.env`:
+
+```powershell
+$claudeKey = (Get-Content .env | Where-Object { $_ -match '^CLAUDE_API_KEY=' } | Select-Object -First 1) -replace '^CLAUDE_API_KEY=', ''
+supabase secrets set "CLAUDE_API_KEY=$claudeKey" "CLAUDE_MODEL=claude-sonnet-5" --project-ref vhktpqsxzcihwijnfaaf
 ```
 
 Verify:

@@ -24,12 +24,12 @@ Deno.serve(async (req) => {
   }
 
   try {
-    const apiKey = Deno.env.get('OPENAI_API_KEY');
+    const apiKey = Deno.env.get('CLAUDE_API_KEY');
     if (!apiKey) {
-      return json({ error: 'OPENAI_API_KEY is not configured.' }, 500);
+      return json({ error: 'CLAUDE_API_KEY is not configured.' }, 500);
     }
 
-    const model = Deno.env.get('OPENAI_TEXT_MODEL') ?? 'gpt-5.6';
+    const model = Deno.env.get('CLAUDE_MODEL') ?? 'claude-sonnet-5';
     const body = (await req.json()) as { imageDeck?: GeneratedImageDeck };
     const imageDeck = body.imageDeck;
 
@@ -37,87 +37,106 @@ Deno.serve(async (req) => {
       return json({ error: 'imageDeck with images is required.' }, 400);
     }
 
-    const response = await fetch('https://api.openai.com/v1/responses', {
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${apiKey}`,
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
         model,
-        input: [
-          {
-            role: 'system',
-            content:
-              'You are a senior presentation editor. Create concise PPT document metadata for an image-based deck. Return strict JSON only.',
-          },
+        max_tokens: 1400,
+        system:
+          'You are a senior presentation editor. Create concise PPT document metadata for an image-based deck. Return strict JSON only, with no markdown fences.',
+        messages: [
           {
             role: 'user',
-            content: JSON.stringify({
-              task: 'Enhance generated slide images into a PPT document plan.',
-              requirements: [
-                'Create a clean deck title.',
-                'Create a safe file name ending in .pptx.',
-                'Write one speaker note per slide.',
-                'Write a short QA checklist for final review.',
-              ],
-              slides: imageDeck.images.map((image) => ({
-                pageNumber: image.pageNumber,
-                title: image.title,
-                prompt: image.prompt,
-              })),
-            }),
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({
+                  task: 'Enhance generated slide images into a PPT document plan.',
+                  outputContract: {
+                    title: 'string',
+                    fileName: 'string ending in .pptx',
+                    speakerNotes: [{ pageNumber: 'number', note: 'string' }],
+                    qaChecklist: ['string'],
+                  },
+                  requirements: [
+                    'Create a clean deck title.',
+                    'Create a safe file name ending in .pptx.',
+                    'Write one speaker note per slide.',
+                    'Write a short QA checklist for final review.',
+                    'Return valid JSON only.',
+                  ],
+                  slides: imageDeck.images.map((image) => ({
+                    pageNumber: image.pageNumber,
+                    title: image.title,
+                    prompt: image.prompt,
+                  })),
+                }),
+              },
+            ],
           },
         ],
-        text: {
-          format: {
-            type: 'json_schema',
-            name: 'ppt_document_enhancement',
-            schema: {
-              type: 'object',
-              additionalProperties: false,
-              required: ['title', 'fileName', 'speakerNotes', 'qaChecklist'],
-              properties: {
-                title: { type: 'string' },
-                fileName: { type: 'string' },
-                speakerNotes: {
-                  type: 'array',
-                  items: {
-                    type: 'object',
-                    additionalProperties: false,
-                    required: ['pageNumber', 'note'],
-                    properties: {
-                      pageNumber: { type: 'number' },
-                      note: { type: 'string' },
-                    },
-                  },
-                },
-                qaChecklist: {
-                  type: 'array',
-                  items: { type: 'string' },
-                },
-              },
-            },
-          },
-        },
       }),
     });
 
     const payload = await response.json();
     if (!response.ok) {
-      throw new Error(payload?.error?.message ?? 'OpenAI document enhancement failed.');
+      throw new Error(payload?.error?.message ?? 'Claude document enhancement failed.');
     }
 
-    const outputText = extractOutputText(payload);
+    const outputText = extractClaudeText(payload);
     if (typeof outputText !== 'string') {
-      throw new Error('OpenAI response did not include output_text.');
+      throw new Error('Claude response did not include text content.');
     }
 
-    return json(JSON.parse(outputText));
+    return json(JSON.parse(extractJson(outputText)));
   } catch (error) {
     return json({ error: error instanceof Error ? error.message : 'Unknown error' }, 500);
   }
 });
+
+function extractClaudeText(payload: Record<string, unknown>): string | null {
+  const content = payload.content;
+  if (!Array.isArray(content)) {
+    return null;
+  }
+
+  return content
+    .map((part) => {
+      if (!part || typeof part !== 'object') {
+        return '';
+      }
+
+      const text = (part as { text?: unknown }).text;
+      return typeof text === 'string' ? text : '';
+    })
+    .join('\n')
+    .trim();
+}
+
+function extractJson(text: string): string {
+  const trimmed = text.trim();
+  if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+    return trimmed;
+  }
+
+  const fencedMatch = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fencedMatch?.[1]) {
+    return fencedMatch[1].trim();
+  }
+
+  const start = trimmed.indexOf('{');
+  const end = trimmed.lastIndexOf('}');
+  if (start >= 0 && end > start) {
+    return trimmed.slice(start, end + 1);
+  }
+
+  throw new Error('Claude response did not include valid JSON.');
+}
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -127,49 +146,4 @@ function json(data: unknown, status = 200): Response {
       'Content-Type': 'application/json',
     },
   });
-}
-
-function extractOutputText(payload: Record<string, unknown>): string | null {
-  if (typeof payload.output_text === 'string') {
-    return payload.output_text;
-  }
-
-  const output = payload.output;
-  if (!Array.isArray(output)) {
-    return null;
-  }
-
-  for (const item of output) {
-    if (!item || typeof item !== 'object') {
-      continue;
-    }
-
-    const content = (item as { content?: unknown }).content;
-    if (!Array.isArray(content)) {
-      continue;
-    }
-
-    for (const part of content) {
-      if (!part || typeof part !== 'object') {
-        continue;
-      }
-
-      const text = (part as { text?: unknown; output_text?: unknown; json?: unknown }).text;
-      if (typeof text === 'string') {
-        return text;
-      }
-
-      const outputText = (part as { output_text?: unknown }).output_text;
-      if (typeof outputText === 'string') {
-        return outputText;
-      }
-
-      const json = (part as { json?: unknown }).json;
-      if (json && typeof json === 'object') {
-        return JSON.stringify(json);
-      }
-    }
-  }
-
-  return null;
 }
