@@ -3,6 +3,8 @@ import { createClient, type SupabaseClient } from 'npm:@supabase/supabase-js@2';
 type SlidePlan = {
   id: string;
   pageNumber: number;
+  archetype: string;
+  visualStructure: string;
   title: string;
   subtitle: string;
   mainMessage: string;
@@ -18,9 +20,15 @@ type PptDeckPlan = {
     targetLanguage: 'English' | 'Korean';
     audience: string;
     purpose: string;
+    styleReference: {
+      notes: string;
+      primaryColorLabel: string;
+      accentColorLabel: string;
+    };
     styleImageDataUrl?: string;
     styleImageUrl?: string;
     selectedTemplateId?: string;
+    logoImageDataUrl?: string;
   };
   slides: SlidePlan[];
 };
@@ -30,6 +38,21 @@ type GenerateSlideImageBody = {
   slide?: SlidePlan;
   jobId?: string;
   itemId?: string;
+};
+
+type JobRequestRow = {
+  request: {
+    deckPlan?: PptDeckPlan;
+  } | null;
+};
+
+type GenerationItemRow = {
+  id: string;
+  item_index: number;
+  input: {
+    slideId?: string;
+    pageNumber?: number;
+  } | null;
 };
 
 const corsHeaders = {
@@ -55,9 +78,8 @@ Deno.serve(async (req) => {
     const body = (await req.json()) as GenerateSlideImageBody;
     jobId = body.jobId;
     itemId = body.itemId;
-    const deckPlan = body.deckPlan;
-    const slide = body.slide;
     supabaseAdmin = createOptionalAdminClient();
+    const { deckPlan, slide } = await resolveGenerationInput(supabaseAdmin, body);
 
     const apiKey = Deno.env.get('OPENAI_API_KEY');
     if (!apiKey) {
@@ -67,18 +89,10 @@ Deno.serve(async (req) => {
 
     const imageModel = Deno.env.get('OPENAI_IMAGE_MODEL') ?? 'gpt-image-2';
 
-    if (!deckPlan || !Array.isArray(deckPlan.slides)) {
-      return json({ error: 'deckPlan with slides is required.' }, 400);
-    }
-
-    if (!slide) {
-      return json({ error: 'slide is required. Generate one slide per function invocation.' }, 400);
-    }
-
     await markProcessing(supabaseAdmin, jobId, itemId);
 
     const prompt = buildSlideImagePrompt(deckPlan, slide);
-    const referenceImage = deckPlan.request.styleImageDataUrl ?? deckPlan.request.styleImageUrl;
+    const referenceImage = deckPlan.request.styleImageDataUrl;
     const b64 = referenceImage
       ? await editImageFromReference(apiKey, imageModel, prompt, referenceImage)
       : await generateImage(apiKey, imageModel, prompt);
@@ -99,23 +113,90 @@ Deno.serve(async (req) => {
       provider: 'openai',
     });
   } catch (error) {
-    await markFailed(supabaseAdmin, jobId, itemId, error instanceof Error ? error.message : 'Unknown error');
-    return json({ error: error instanceof Error ? error.message : 'Unknown error' }, 500);
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    await markFailed(supabaseAdmin, jobId, itemId, message);
+    if (error instanceof OpenAiImageRateLimitError) {
+      return json(
+        { error: message, retryAfterSeconds: error.retryAfterSeconds },
+        429,
+        { 'Retry-After': String(error.retryAfterSeconds) },
+      );
+    }
+    return json({ error: message }, 500);
   }
 });
+
+async function resolveGenerationInput(
+  supabase: SupabaseClient | null,
+  body: GenerateSlideImageBody,
+): Promise<{ deckPlan: PptDeckPlan; slide: SlidePlan }> {
+  if (body.deckPlan && Array.isArray(body.deckPlan.slides) && body.slide) {
+    return { deckPlan: body.deckPlan, slide: body.slide };
+  }
+
+  if (!supabase || !body.jobId || !body.itemId) {
+    throw new Error('deckPlan and slide are required unless jobId and itemId are provided.');
+  }
+
+  const { data: job, error: jobError } = await supabase
+    .from('generation_jobs')
+    .select('request')
+    .eq('id', body.jobId)
+    .single();
+
+  if (jobError || !job) {
+    throw jobError ?? new Error('Generation job was not found.');
+  }
+
+  const { data: item, error: itemError } = await supabase
+    .from('generation_items')
+    .select('id,item_index,input')
+    .eq('id', body.itemId)
+    .eq('job_id', body.jobId)
+    .single();
+
+  if (itemError || !item) {
+    throw itemError ?? new Error('Generation item was not found.');
+  }
+
+  const deckPlan = ((job as JobRequestRow).request?.deckPlan ?? null) as PptDeckPlan | null;
+  if (!deckPlan || !Array.isArray(deckPlan.slides)) {
+    throw new Error('Generation job does not include a valid deckPlan.');
+  }
+
+  const generationItem = item as GenerationItemRow;
+  const pageNumber = generationItem.input?.pageNumber ?? generationItem.item_index;
+  const slideId = generationItem.input?.slideId;
+  const slide =
+    deckPlan.slides.find((candidate) => candidate.id === slideId) ??
+    deckPlan.slides.find((candidate) => candidate.pageNumber === pageNumber);
+
+  if (!slide) {
+    throw new Error(`Slide plan for item ${body.itemId} was not found.`);
+  }
+
+  return { deckPlan, slide };
+}
 
 function buildSlideImagePrompt(deckPlan: PptDeckPlan, slide: SlidePlan): string {
   return [
     slide.imagePrompt,
     '',
-    'Create a polished 16:9 presentation visual background.',
-    'Do not include readable text, letters, numbers, captions, logos, page numbers, or placeholder dots.',
-    'Represent the slide idea using editable-PPT-friendly visual structure only: cards, icons, flow lines, dashboards, shapes, diagrams, and whitespace.',
-    'Leave clear areas for editable title, subtitle, body labels, takeaway, footer, and page number to be added in PowerPoint.',
+    'Create a polished 16:9 presentation reference slide with the approved copy visible.',
+    'The final PPTX will be rebuilt by Claude from this image, so use the exact approved title, subtitle, labels, and takeaway that were provided above.',
+    'Do not repeat the selected template layout. Apply its palette, typography mood, icon language, and footer treatment to this slide-specific composition only.',
+    'Place copy on simple, high-contrast background regions and avoid text over complex illustrations so Claude can separate visual assets from editable text.',
+    'Do not invent or render a brand logo. Reserve a clean logo area in the top-right corner without any text.',
+    deckPlan.request.logoImageDataUrl
+      ? 'A real logo was uploaded and will be inserted later in PowerPoint at the top-right, so keep that corner clean.'
+      : 'No logo was uploaded. Keep the top-right logo area clean and empty; PowerPoint will add its editable logo placeholder there.',
+    'Typography style should resemble Pretendard: modern, clean, readable Korean/English sans-serif.',
     `Audience: ${deckPlan.request.audience}`,
     `Purpose: ${deckPlan.request.purpose}`,
     `Language context: ${deckPlan.request.targetLanguage}`,
     `Slide concept: ${slide.mainMessage}`,
+    `Story role: ${slide.archetype}. Required visual structure: ${slide.visualStructure}.`,
+    'Preserve the required visual structure instead of reusing the previous slide layout.',
   ].join('\n');
 }
 
@@ -167,6 +248,9 @@ async function editImageFromReference(
 async function readImageB64(response: Response): Promise<string> {
   const payload = await response.json();
   if (!response.ok) {
+    if (response.status === 429) {
+      throw new OpenAiImageRateLimitError(getRetryAfterSeconds(response, payload));
+    }
     throw new Error(payload?.error?.message ?? 'OpenAI image generation failed.');
   }
 
@@ -176,6 +260,23 @@ async function readImageB64(response: Response): Promise<string> {
   }
 
   return b64;
+}
+
+class OpenAiImageRateLimitError extends Error {
+  constructor(readonly retryAfterSeconds: number) {
+    super(`OpenAI image rate limit reached. Retry after ${retryAfterSeconds} seconds.`);
+    this.name = 'OpenAiImageRateLimitError';
+  }
+}
+
+function getRetryAfterSeconds(response: Response, payload: unknown): number {
+  const headerSeconds = Number(response.headers.get('retry-after'));
+  if (Number.isFinite(headerSeconds) && headerSeconds > 0) return Math.ceil(headerSeconds);
+  const message = isRecord(payload) && isRecord(payload.error) && typeof payload.error.message === 'string'
+    ? payload.error.message
+    : '';
+  const match = message.match(/try again in\s+(\d+)s/iu);
+  return match ? Math.max(1, Number(match[1])) : 15;
 }
 
 async function loadReferenceImage(reference: string): Promise<{ bytes: Uint8Array; mimeType: string }> {
@@ -225,14 +326,6 @@ async function markProcessing(supabase: SupabaseClient | null, jobId?: string, i
     return;
   }
 
-  await supabase
-    .from('generation_jobs')
-    .update({
-      status: 'processing',
-      updated_at: new Date().toISOString(),
-    })
-    .eq('id', jobId);
-
   if (!itemId) {
     return;
   }
@@ -246,6 +339,8 @@ async function markProcessing(supabase: SupabaseClient | null, jobId?: string, i
       updated_at: new Date().toISOString(),
     })
     .eq('id', itemId);
+
+  await refreshJobStatus(supabase, jobId);
 }
 
 async function markSucceeded(
@@ -270,31 +365,7 @@ async function markSucceeded(
       .eq('id', itemId);
   }
 
-  const { count } = await supabase
-    .from('generation_items')
-    .select('id', { count: 'exact', head: true })
-    .eq('job_id', jobId)
-    .eq('status', 'succeeded');
-
-  const { data: job } = await supabase
-    .from('generation_jobs')
-    .select('total_items')
-    .eq('id', jobId)
-    .single();
-
-  const completedItems = count ?? 0;
-  const totalItems = Number(job?.total_items ?? 0);
-  const isComplete = totalItems > 0 && completedItems >= totalItems;
-
-  await supabase
-    .from('generation_jobs')
-    .update({
-      status: isComplete ? 'succeeded' : 'processing',
-      completed_items: completedItems,
-      progress: totalItems > 0 ? Math.round((completedItems / totalItems) * 100) : 0,
-      updated_at: new Date().toISOString(),
-    })
-    .eq('id', jobId);
+  await refreshJobStatus(supabase, jobId);
 }
 
 async function markFailed(
@@ -306,15 +377,6 @@ async function markFailed(
   if (!supabase || !jobId) {
     return;
   }
-
-  await supabase
-    .from('generation_jobs')
-    .update({
-      status: 'failed',
-      error_message: message,
-      updated_at: new Date().toISOString(),
-    })
-    .eq('id', jobId);
 
   if (!itemId) {
     return;
@@ -328,6 +390,15 @@ async function markFailed(
       updated_at: new Date().toISOString(),
     })
     .eq('id', itemId);
+
+  await refreshJobStatus(supabase, jobId);
+}
+
+async function refreshJobStatus(supabase: SupabaseClient, jobId: string): Promise<void> {
+  const { error } = await supabase.rpc('refresh_ppt_generation_job_status', { p_job_id: jobId });
+  if (error) {
+    throw error;
+  }
 }
 
 async function uploadGeneratedImage(
@@ -366,11 +437,16 @@ function base64ToBytes(b64: string): Uint8Array {
   return bytes;
 }
 
-function json(data: unknown, status = 200): Response {
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function json(data: unknown, status = 200, extraHeaders: Record<string, string> = {}): Response {
   return new Response(JSON.stringify(data), {
     status,
     headers: {
       ...corsHeaders,
+      ...extraHeaders,
       'Content-Type': 'application/json',
     },
   });

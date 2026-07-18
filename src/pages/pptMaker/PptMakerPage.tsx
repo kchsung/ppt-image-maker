@@ -32,10 +32,16 @@ export function PptMakerPage() {
     setActiveTab('output');
     void dispatch(generateDeckPlan(form))
       .unwrap()
-      .then((generatedDeckPlan) => dispatch(generateSlideImages(generatedDeckPlan)).unwrap())
-      .then((generatedImageDeck) => dispatch(enhanceGeneratedPptDocument(generatedImageDeck)).unwrap())
+      .then((generatedDeckPlan) =>
+        dispatch(generateSlideImages(generatedDeckPlan))
+          .unwrap()
+          .then((generatedImageDeck) => ({ generatedDeckPlan, generatedImageDeck })),
+      )
+      .then(({ generatedDeckPlan, generatedImageDeck }) =>
+        dispatch(enhanceGeneratedPptDocument({ deckPlan: generatedDeckPlan, imageDeck: generatedImageDeck })).unwrap(),
+      )
       .then(() => {
-        toast.success('PPT images generated.');
+        toast.success('Editable PPTX generated.');
       })
       .catch(() => toast.error('PPT generation failed.'));
   };
@@ -51,7 +57,24 @@ export function PptMakerPage() {
   };
 
   const handleExportPptx = () => {
-    if (!imageDeck) {
+    if (!imageDeck || !documentEnhancement) {
+      toast.error('Wait for Claude to finish the final editable PPTX.');
+      return;
+    }
+
+    if (documentEnhancement?.pptxUrl) {
+      const link = document.createElement('a');
+      link.href = documentEnhancement.pptxUrl;
+      link.download = documentEnhancement.fileName;
+      link.rel = 'noopener';
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      return;
+    }
+
+    if (documentEnhancement.generationMode !== 'browser-fallback') {
+      toast.error('The native PPTX file is not available. Generate the document again from the List page.');
       return;
     }
 
@@ -64,6 +87,15 @@ export function PptMakerPage() {
       )
       .then(() => toast.success('PPTX export started.'))
       .catch(() => toast.error('PPTX export failed.'));
+  };
+
+  const handlePreviewPptx = () => {
+    if (!documentEnhancement?.pptxUrl) {
+      return;
+    }
+
+    const viewerUrl = `https://view.officeapps.live.com/op/view.aspx?src=${encodeURIComponent(documentEnhancement.pptxUrl)}`;
+    window.open(viewerUrl, '_blank', 'noopener,noreferrer');
   };
 
   return (
@@ -121,12 +153,21 @@ export function PptMakerPage() {
           onSubmit={handleSubmit}
         />
       ) : isGenerating ? (
-        <GenerationProgressPanel planStatus={status} imageStatus={imageStatus} documentStatus={documentStatus} />
+        <GenerationProgressPanel
+          deckPlan={deckPlan}
+          documentEnhancement={documentEnhancement}
+          documentStatus={documentStatus}
+          imageDeck={imageDeck}
+          imageStatus={imageStatus}
+          planStatus={status}
+        />
       ) : (
         <GeneratedImageDeckPanel
           imageDeck={imageDeck}
           documentEnhancement={documentEnhancement}
+          logoImageDataUrl={deckPlan?.request.logoImageDataUrl}
           onExportPptx={handleExportPptx}
+          onPreviewPptx={handlePreviewPptx}
         />
       )}
     </>

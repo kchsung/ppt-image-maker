@@ -8,9 +8,17 @@ describe('pptMakerService', () => {
 
     expect(deck.slides).toHaveLength(samplePptMakerRequest.slideCount);
     expect(deck.slides[0].archetype).toBe('cover');
+    expect(deck.slides.map((slide) => slide.visualStructure)).toEqual([
+      'hero-visual',
+      'message-emphasis',
+      'card-grid',
+      'closing-commitment',
+    ]);
     expect(deck.slides[0].imagePrompt).toContain('Create slide 1');
-    expect(deck.slides[0].imagePrompt).toContain('must not contain readable words');
-    expect(deck.slides[0].imagePrompt).not.toContain('Required labels');
+    expect(deck.slides[0].imagePrompt).toContain('Required visual structure: hero-visual');
+    expect(deck.slides[0].imagePrompt).toContain('Render the required copy exactly as written below');
+    expect(deck.slides[0].imagePrompt).toContain('Label 1:');
+    expect(deck.slides[0].imagePrompt).not.toContain('must not contain readable words');
     expect(deck.slides[0].imagePrompt).toContain(samplePptMakerRequest.audience);
   });
 

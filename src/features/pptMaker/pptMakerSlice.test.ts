@@ -14,6 +14,7 @@ const sampleForm: PptMakerFormState = {
   styleSourceMode: 'template',
   selectedTemplateId: defaultPptTemplate.id,
   styleImageDataUrl: null,
+  logoImageDataUrl: null,
 };
 
 describe('pptMakerSlice', () => {
@@ -31,6 +32,7 @@ describe('pptMakerSlice', () => {
         createdAt: '2026-07-16T00:00:00.000Z',
         request: samplePptMakerRequest,
         slides: [],
+        copyQa: { status: 'passed', checks: [], issues: [] },
       },
       'request-1',
       sampleForm,
@@ -52,6 +54,7 @@ describe('pptMakerSlice', () => {
           createdAt: '2026-07-16T00:00:00.000Z',
           request: samplePptMakerRequest,
           slides: [],
+          copyQa: { status: 'passed', checks: [], issues: [] },
         },
         'request-1',
         sampleForm,

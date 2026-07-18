@@ -38,7 +38,7 @@ export function AppLayout({ children }: AppLayoutProps) {
             }
           >
             <ShieldCheck className="h-4 w-4" />
-            Admin
+            List
           </NavLink>
         </nav>
       </aside>

@@ -8,6 +8,10 @@ type ItemRow = {
   output_path: string | null;
 };
 
+type JobRow = {
+  result_path: string | null;
+};
+
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
@@ -30,6 +34,16 @@ Deno.serve(async (req) => {
     }
 
     const supabase = createAdminClient();
+    const { data: job, error: jobError } = await supabase
+      .from('generation_jobs')
+      .select('result_path')
+      .eq('id', body.jobId)
+      .single();
+
+    if (jobError) {
+      throw jobError;
+    }
+
     const { data: items, error: itemsError } = await supabase
       .from('generation_items')
       .select('output_path')
@@ -39,8 +53,10 @@ Deno.serve(async (req) => {
       throw itemsError;
     }
 
-    const storagePaths = ((items ?? []) as ItemRow[])
-      .map((item) => toStoragePath(item.output_path))
+    const storagePaths = [
+      toStoragePath((job as JobRow | null)?.result_path ?? null),
+      ...((items ?? []) as ItemRow[]).map((item) => toStoragePath(item.output_path)),
+    ]
       .filter((path): path is string => Boolean(path));
 
     if (storagePaths.length > 0) {

@@ -12,6 +12,7 @@ type JobRow = {
     };
   };
   error_message: string | null;
+  result_path: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -45,7 +46,7 @@ Deno.serve(async (req) => {
     const supabase = createAdminClient();
     const { data: jobs, error: jobsError } = await supabase
       .from('generation_jobs')
-      .select('id,status,progress,total_items,completed_items,request,error_message,created_at,updated_at')
+      .select('id,status,progress,total_items,completed_items,request,result_path,error_message,created_at,updated_at')
       .eq('type', 'ppt_image_deck')
       .order('created_at', { ascending: false })
       .limit(50);
@@ -87,6 +88,9 @@ Deno.serve(async (req) => {
         createdAt: job.created_at,
         updatedAt: job.updated_at,
         errorMessage: job.error_message,
+        deckPlan: job.request?.deckPlan ?? null,
+        resultPath: job.result_path,
+        pptxUrl: getPublicImageUrl(supabase, job.result_path),
         items: (itemsByJob.get(job.id) ?? []).map((item) => ({
           id: item.id,
           pageNumber: item.item_index,
@@ -99,9 +103,30 @@ Deno.serve(async (req) => {
       })),
     });
   } catch (error) {
-    return json({ error: error instanceof Error ? error.message : 'Unknown error' }, 500);
+    return json({ error: getErrorMessage(error) }, 500);
   }
 });
+
+function getErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  if (error && typeof error === 'object') {
+    const message = (error as { message?: unknown }).message;
+    const details = (error as { details?: unknown }).details;
+    const errorCode = (error as { code?: unknown }).code;
+    const parts = [message, details, errorCode]
+      .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+      .map((value) => value.trim());
+
+    if (parts.length > 0) {
+      return parts.join(' | ');
+    }
+  }
+
+  return 'Unable to list PPT generation jobs.';
+}
 
 function createAdminClient(): SupabaseClient {
   const supabaseUrl = Deno.env.get('SUPABASE_URL');

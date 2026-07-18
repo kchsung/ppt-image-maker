@@ -46,6 +46,20 @@ export function PptMakerForm({ form, templates, isLoading, onChange, onTemplateS
     reader.readAsDataURL(file);
   };
 
+  const handleLogoChange = (file: File | undefined) => {
+    if (!file) {
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === 'string') {
+        onChange({ logoImageDataUrl: reader.result });
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
   const setSourceMode = (styleSourceMode: StyleSourceMode) => {
     onChange({ styleSourceMode });
   };
@@ -127,6 +141,41 @@ export function PptMakerForm({ form, templates, isLoading, onChange, onTemplateS
             onChange={(event) => onChange({ styleNotes: event.target.value })}
           />
         </label>
+
+        <div className="rounded-md border border-border bg-surface-muted p-3">
+          <div className="mb-3">
+            <p className="text-sm font-semibold text-text-main">Logo</p>
+            <p className="mt-1 text-xs text-text-subtle">
+              Leave empty to keep a logo placeholder. Upload a logo only when it should be placed in the PPT.
+            </p>
+          </div>
+          {form.logoImageDataUrl ? (
+            <div className="flex items-center gap-3">
+              <div className="flex h-16 w-28 items-center justify-center rounded-md border border-border bg-surface p-2">
+                <img src={form.logoImageDataUrl} alt="Uploaded logo" className="max-h-full max-w-full object-contain" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-semibold text-text-main">Logo loaded</p>
+                <p className="text-xs text-text-subtle">The logo will be inserted in the PPT logo area.</p>
+              </div>
+              <Button variant="ghost" onClick={() => onChange({ logoImageDataUrl: null })} aria-label="Remove logo">
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+          ) : (
+            <label className="flex cursor-pointer items-center justify-center gap-2 rounded-md bg-surface px-4 py-4 text-sm font-semibold text-text-subtle transition hover:text-primary">
+              <ImageUp className="h-4 w-4" />
+              Upload logo image
+              <input
+                aria-label="Logo image"
+                className="sr-only"
+                type="file"
+                accept="image/png,image/jpeg,image/webp,image/svg+xml"
+                onChange={(event) => handleLogoChange(event.target.files?.[0])}
+              />
+            </label>
+          )}
+        </div>
 
         <div className="space-y-3">
           <div className="flex items-center justify-between gap-3">

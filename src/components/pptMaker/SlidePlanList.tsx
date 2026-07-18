@@ -53,6 +53,7 @@ export function SlidePlanList({ deckPlan }: SlidePlanListProps) {
                 <div className="mb-2 flex flex-wrap items-center gap-2">
                   <Badge>#{slide.pageNumber}</Badge>
                   <Badge className="bg-accent-muted text-accent">{slide.archetype}</Badge>
+                  <Badge className="bg-primary-muted text-primary">{slide.visualStructure}</Badge>
                 </div>
                 <h3 className="font-bold text-text-main">{slide.title}</h3>
                 <p className="mt-1 text-sm text-text-subtle">{slide.subtitle}</p>

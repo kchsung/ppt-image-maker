@@ -22,6 +22,6 @@ describe('PptMakerPage', () => {
       'AI changes execution. Human judgment still matters. Teams need workflows. Validation creates trust.',
     );
     await user.click(screen.getByRole('button', { name: /generate ppt images/i }));
-    expect(await screen.findByAltText('Generated slide 1')).toBeInTheDocument();
+    expect(await screen.findByAltText('PPT preview slide 1')).toBeInTheDocument();
   });
 });

@@ -5,6 +5,7 @@ import { enhancePptDocument } from '@/services/pptDocument.service';
 import { pptMakerService } from '@/services/pptMaker.service';
 import type {
   GeneratedImageDeck,
+  GeneratedSlideImage,
   PptDeckPlan,
   PptDocumentEnhancement,
   PptMakerFormState,
@@ -33,6 +34,7 @@ const initialState: PptMakerState = {
     styleSourceMode: 'template',
     selectedTemplateId: defaultPptTemplate.id,
     styleImageDataUrl: null,
+    logoImageDataUrl: null,
   },
   deckPlan: null,
   imageDeck: null,
@@ -64,6 +66,7 @@ function toRequest(form: PptMakerFormState): PptMakerRequest {
     styleImageDataUrl: form.styleSourceMode === 'upload' ? (form.styleImageDataUrl ?? undefined) : undefined,
     styleImageUrl: usesTemplate ? selectedTemplate.imageUrl : undefined,
     selectedTemplateId: usesTemplate ? selectedTemplate.id : undefined,
+    logoImageDataUrl: form.logoImageDataUrl ?? undefined,
   };
 }
 
@@ -73,15 +76,17 @@ export const generateDeckPlan = createAsyncThunk('pptMaker/generateDeckPlan', as
 
 export const generateSlideImages = createAsyncThunk(
   'pptMaker/generateSlideImages',
-  async (deckPlan: PptDeckPlan) => {
-    return pptMakerService.generateSlideImages(deckPlan);
+  async (deckPlan: PptDeckPlan, { dispatch }) => {
+    return pptMakerService.generateSlideImages(deckPlan, (image) => {
+      dispatch(appendGeneratedSlideImage(image));
+    });
   },
 );
 
 export const enhanceGeneratedPptDocument = createAsyncThunk(
   'pptMaker/enhanceGeneratedPptDocument',
-  async (imageDeck: GeneratedImageDeck) => {
-    return enhancePptDocument(imageDeck);
+  async ({ deckPlan, imageDeck }: { deckPlan: PptDeckPlan; imageDeck: GeneratedImageDeck }) => {
+    return enhancePptDocument(deckPlan, imageDeck);
   },
 );
 
@@ -101,6 +106,28 @@ export const pptMakerSlice = createSlice({
       state.documentStatus = 'idle';
       state.error = null;
     },
+    appendGeneratedSlideImage(state, action: PayloadAction<GeneratedSlideImage>) {
+      if (!state.imageDeck && state.deckPlan) {
+        state.imageDeck = {
+          id: `image-deck-${state.deckPlan.id}`,
+          deckPlanId: state.deckPlan.id,
+          createdAt: new Date().toISOString(),
+          images: [],
+        };
+      }
+
+      if (!state.imageDeck) {
+        return;
+      }
+
+      const nextImage = action.payload;
+      const existingIndex = state.imageDeck.images.findIndex((image) => image.slideId === nextImage.slideId);
+      if (existingIndex >= 0) {
+        state.imageDeck.images[existingIndex] = nextImage;
+      } else {
+        state.imageDeck.images.push(nextImage);
+      }
+    },
   },
   extraReducers: (builder) => {
     builder
@@ -118,9 +145,16 @@ export const pptMakerSlice = createSlice({
         state.status = 'failed';
         state.error = action.error.message ?? 'Deck generation failed.';
       })
-      .addCase(generateSlideImages.pending, (state) => {
+      .addCase(generateSlideImages.pending, (state, action) => {
         state.imageStatus = 'loading';
         state.error = null;
+        state.imageDeck = {
+          id: `image-deck-${action.meta.arg.id}`,
+          deckPlanId: action.meta.arg.id,
+          generationJobId: undefined,
+          createdAt: new Date().toISOString(),
+          images: [],
+        };
       })
       .addCase(generateSlideImages.fulfilled, (state, action) => {
         state.imageStatus = 'succeeded';
@@ -146,5 +180,5 @@ export const pptMakerSlice = createSlice({
   },
 });
 
-export const { updateForm, resetDeckPlan } = pptMakerSlice.actions;
+export const { appendGeneratedSlideImage, updateForm, resetDeckPlan } = pptMakerSlice.actions;
 export const pptMakerReducer = pptMakerSlice.reducer;

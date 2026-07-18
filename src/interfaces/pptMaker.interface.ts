@@ -4,12 +4,16 @@ import type {
   PptDeckPlan,
   PptDocumentEnhancement,
   PptMakerRequest,
+  GeneratedSlideImage,
 } from '@/types/models/pptMaker.model';
 
 export interface PptMakerService {
   generateDeckPlan(request: PptMakerRequest): Promise<PptDeckPlan>;
   createGenerationJob(deckPlan: PptDeckPlan): Promise<GenerationJob | null>;
-  generateSlideImages(deckPlan: PptDeckPlan): Promise<GeneratedImageDeck>;
+  generateSlideImages(
+    deckPlan: PptDeckPlan,
+    onSlideGenerated?: (image: GeneratedSlideImage) => void,
+  ): Promise<GeneratedImageDeck>;
 }
 
 export interface PptExportService {
@@ -19,4 +23,9 @@ export interface PptExportService {
     fileName?: string,
     enhancement?: PptDocumentEnhancement,
   ): Promise<void>;
+  createImageDeckBlob(
+    deck: GeneratedImageDeck,
+    deckPlan?: PptDeckPlan | null,
+    enhancement?: PptDocumentEnhancement,
+  ): Promise<Blob>;
 }

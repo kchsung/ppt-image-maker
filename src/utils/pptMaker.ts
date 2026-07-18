@@ -1,4 +1,4 @@
-import type { SlideArchetype, TargetLanguage } from '@/types/models/pptMaker.model';
+import type { PptDeckPlan, SlideArchetype, SlideVisualStructure, TargetLanguage } from '@/types/models/pptMaker.model';
 
 const EN_STOP_WORDS = new Set([
   'the',
@@ -75,6 +75,45 @@ export function selectArchetype(pageNumber: number, totalSlides: number): SlideA
   return flow[(pageNumber - 2) % flow.length];
 }
 
+export function selectVisualStructure(
+  pageNumber: number,
+  totalSlides: number,
+  archetype: SlideArchetype,
+): SlideVisualStructure {
+  if (pageNumber === 1) return 'hero-visual';
+  if (pageNumber === totalSlides) return 'closing-commitment';
+
+  const structureByArchetype: Record<Exclude<SlideArchetype, 'cover' | 'closing'>, SlideVisualStructure> = {
+    'section-opener': 'message-emphasis',
+    'card-grid': 'card-grid',
+    comparison: 'side-by-side-comparison',
+    process: 'numbered-process',
+    'before-after': 'before-after-mapping',
+    'case-dashboard': 'case-story',
+  };
+
+  return structureByArchetype[archetype as Exclude<SlideArchetype, 'cover' | 'closing'>] ?? 'hub-and-spoke';
+}
+
+export function getVisualStructureDescription(structure: SlideVisualStructure): string {
+  const descriptions: Record<SlideVisualStructure, string> = {
+    'hero-visual': 'One strong visual with a concise opening claim and generous whitespace.',
+    'message-emphasis': 'A bold central statement with two or three supporting visual cues.',
+    'card-grid': 'Three to five parallel cards arranged as a balanced grid.',
+    'side-by-side-comparison': 'Two clearly separated columns that contrast alternatives or states.',
+    'numbered-process': 'A directional sequence of numbered steps connected by arrows.',
+    'before-after-mapping': 'Paired before and after states linked by a transformation path.',
+    'hub-and-spoke': 'One central concept connected to surrounding contributors or outcomes.',
+    'metrics-dashboard': 'A compact dashboard with key metrics, a chart zone, and an insight panel.',
+    roadmap: 'A milestone timeline that moves from current priorities to a destination.',
+    'pyramid-framework': 'A layered pyramid showing foundations, capabilities, and higher outcomes.',
+    'case-story': 'A scenario flow that shows context, evidence, decision, and outcome.',
+    'closing-commitment': 'A decisive closing statement with a focused next action or commitment.',
+  };
+
+  return descriptions[structure];
+}
+
 export function createSlideTitle(seed: string, language: TargetLanguage, pageNumber: number): string {
   const keywords = extractKeywords(seed, 3);
   if (language === 'Korean') {
@@ -124,6 +163,64 @@ export function validateSlideText(value: string, language: TargetLanguage): stri
 
 export function titleCase(value: string): string {
   return value.replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+const FORBIDDEN_COPY_PATTERNS = [
+  /\.{2,}/,
+  /…/u,
+  /\[[^\]]*(?:page|페이지)[^\]]*\]/iu,
+  /\bDesigned for\b/iu,
+  /\bMoves From\b/iu,
+  /\bSlide Title\b/iu,
+  /\bKey Point\b/iu,
+  /\bLorem ipsum\b/iu,
+];
+
+const HANGUL_CHARACTER_PATTERN = /[\u3131-\u318e\uac00-\ud7a3]/u;
+
+export function getDeckCopyQaIssues(deckPlan: Pick<PptDeckPlan, 'request' | 'slides'>): string[] {
+  const issues: string[] = [];
+
+  deckPlan.slides.forEach((slide) => {
+    const fields = [slide.title, slide.subtitle, slide.mainMessage, slide.takeaway, ...slide.labels];
+    fields.forEach((value) => {
+      const text = value.trim();
+      if (!text) {
+        issues.push(`Slide ${slide.pageNumber} contains an empty copy field.`);
+        return;
+      }
+
+      if (FORBIDDEN_COPY_PATTERNS.some((pattern) => pattern.test(text))) {
+        issues.push(`Slide ${slide.pageNumber} contains placeholder or clipped copy: "${text}".`);
+      }
+
+      if (deckPlan.request.targetLanguage === 'Korean' && hasUnapprovedLatinCopy(text)) {
+        issues.push(`Slide ${slide.pageNumber} contains unapproved English copy: "${text}".`);
+      }
+
+      if (deckPlan.request.targetLanguage === 'English' && HANGUL_CHARACTER_PATTERN.test(text)) {
+        issues.push(`Slide ${slide.pageNumber} contains Korean copy while English was requested: "${text}".`);
+      }
+    });
+  });
+
+  const structures = deckPlan.slides.map((slide) => slide.visualStructure);
+  const requiredDistinctStructures = Math.min(deckPlan.slides.length, 4);
+  if (new Set(structures).size < requiredDistinctStructures) {
+    issues.push(`Deck needs at least ${requiredDistinctStructures} distinct visual structures.`);
+  }
+  structures.forEach((structure, index) => {
+    if (index > 0 && structure === structures[index - 1]) {
+      issues.push(`Slides ${index} and ${index + 1} repeat the same visual structure.`);
+    }
+  });
+
+  return Array.from(new Set(issues));
+}
+
+function hasUnapprovedLatinCopy(value: string): boolean {
+  const tokens = value.match(/[A-Za-z][A-Za-z-]*/g) ?? [];
+  return tokens.some((token) => !['AI', 'QLEARN', 'PPT', 'CTO', 'CEO'].includes(token));
 }
 
 export function stripEllipsis(value: string): string {
