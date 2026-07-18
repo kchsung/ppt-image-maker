@@ -30,6 +30,8 @@ export interface AdminGenerationJob {
   pptxProgress?: number;
   pptxPhase?: string | null;
   pptxUpdatedAt?: string | null;
+  pptxExecutor?: 'netlify-worker' | 'supabase-edge' | null;
+  pptxExecutionId?: string | null;
   items: AdminGenerationItem[];
 }
 

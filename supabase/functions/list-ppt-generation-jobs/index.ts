@@ -16,6 +16,8 @@ type JobRow = {
       progress?: number;
       phase?: string;
       updatedAt?: string;
+      executor?: 'netlify-worker' | 'supabase-edge';
+      executionId?: string;
     };
   };
   error_message: string | null;
@@ -103,6 +105,8 @@ Deno.serve(async (req) => {
         pptxProgress: job.result_path ? 100 : job.request?.pptxGeneration?.progress ?? 0,
         pptxPhase: job.result_path ? 'Ready to preview and download' : job.request?.pptxGeneration?.phase ?? null,
         pptxUpdatedAt: job.request?.pptxGeneration?.updatedAt ?? null,
+        pptxExecutor: job.request?.pptxGeneration?.executor ?? (job.result_path || job.request?.pptxGeneration ? 'supabase-edge' : null),
+        pptxExecutionId: job.request?.pptxGeneration?.executionId ?? null,
         items: (itemsByJob.get(job.id) ?? []).map((item) => ({
           id: item.id,
           pageNumber: item.item_index,

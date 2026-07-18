@@ -35,6 +35,7 @@ type SlideImage = {
 type WorkerRequest = {
   deckPlan?: DeckPlan;
   imageDeck?: { generationJobId?: string; images?: SlideImage[] };
+  executionId?: string;
 };
 
 type ClaudeFile = { id?: string; filename?: string };
@@ -48,35 +49,39 @@ export default async (request: Request): Promise<Response> => {
   }
 
   let jobId: string | undefined;
+  let executionId: string | undefined;
   let supabase: SupabaseClient | null = null;
 
   try {
     const body = await request.json() as WorkerRequest;
-    if (!body.deckPlan || !body.imageDeck?.generationJobId || !body.imageDeck.images?.length) {
-      return Response.json({ error: 'deckPlan and generated slide images are required.' }, { status: 400 });
+    if (!body.deckPlan || !body.imageDeck?.generationJobId || !body.imageDeck.images?.length || !body.executionId) {
+      return Response.json({ error: 'deckPlan, generated slide images, and an execution ID are required.' }, { status: 400 });
     }
 
     jobId = body.imageDeck.generationJobId;
+    executionId = body.executionId;
     supabase = createAdminClient();
     const apiKey = requiredEnv('CLAUDE_API_KEY');
-    logEvent('pptx.worker.started', { jobId, slideCount: body.imageDeck.images.length });
+    logEvent('pptx.worker.started', { jobId, executionId: body.executionId, slideCount: body.imageDeck.images.length });
 
     const existingJob = await getExistingJob(supabase, jobId);
     if (existingJob.result_path) {
-      await updateStatus(supabase, jobId, 'succeeded', null, 100, 'Ready to preview and download');
-      logEvent('pptx.worker.skipped_existing_output', { jobId });
+      await updateStatus(supabase, jobId, 'succeeded', null, 100, 'Ready to preview and download', body.executionId);
+      logEvent('pptx.worker.skipped_existing_output', { jobId, executionId: body.executionId });
       return Response.json({ ok: true });
     }
 
-    await generateNativePptx(apiKey, body.deckPlan, body.imageDeck.images, jobId, supabase);
-    await updateStatus(supabase, jobId, 'succeeded', null, 100, 'Ready to preview and download');
-    logEvent('pptx.worker.completed', { jobId });
+    await generateNativePptx(apiKey, body.deckPlan, body.imageDeck.images, jobId, body.executionId, supabase);
+    await updateStatus(supabase, jobId, 'succeeded', null, 100, 'Ready to preview and download', body.executionId);
+    logEvent('pptx.worker.completed', { jobId, executionId: body.executionId });
     return Response.json({ ok: true });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Native PPTX worker failed.';
     console.error(JSON.stringify({ event: 'pptx.worker.failed', jobId: jobId ?? null, error: message }));
     if (supabase && jobId) {
-      await updateStatus(supabase, jobId, 'failed', message, 0, 'PPTX generation failed');
+      if (executionId) {
+        await updateStatus(supabase, jobId, 'failed', message, 0, 'PPTX generation failed', executionId);
+      }
     }
     throw error;
   }
@@ -92,6 +97,7 @@ async function generateNativePptx(
   deckPlan: DeckPlan,
   slideImages: SlideImage[],
   jobId: string,
+  executionId: string,
   supabase: SupabaseClient,
 ): Promise<void> {
   const uploadedFileIds: string[] = [];
@@ -101,7 +107,7 @@ async function generateNativePptx(
       throw new Error('Every approved slide needs a generated reference image.');
     }
 
-    await updateStatus(supabase, jobId, 'processing', null, 15, 'Uploading slide references to Claude');
+    await updateStatus(supabase, jobId, 'processing', null, 15, 'Uploading slide references to Claude', executionId);
     const uploads = await Promise.all(images.map(async (image) => {
       const file = await uploadSourceFile(apiKey, image.imageDataUrl ?? image.imageUrl, `slide-${String(image.pageNumber).padStart(2, '0')}.png`);
       uploadedFileIds.push(file.id);
@@ -112,16 +118,16 @@ async function generateNativePptx(
       : null;
     if (logoUpload) uploadedFileIds.push(logoUpload.id);
 
-    await updateStatus(supabase, jobId, 'processing', null, 35, 'Claude is rebuilding editable slides');
+    await updateStatus(supabase, jobId, 'processing', null, 35, 'Claude is rebuilding editable slides', executionId);
     const response = await createNativePresentation(apiKey, deckPlan, uploads, logoUpload);
     const pptxFileId = await findGeneratedPptxFile(apiKey, response);
 
-    await updateStatus(supabase, jobId, 'processing', null, 80, 'Downloading the generated PPTX');
+    await updateStatus(supabase, jobId, 'processing', null, 80, 'Downloading the generated PPTX', executionId);
     const pptxBytes = await downloadClaudeFile(apiKey, pptxFileId);
     const fileName = createFileName(deckPlan.title);
     const storagePath = `${jobId}/final/${fileName}`;
 
-    await updateStatus(supabase, jobId, 'processing', null, 92, 'Saving the PPTX to Supabase Storage');
+    await updateStatus(supabase, jobId, 'processing', null, 92, 'Saving the PPTX to Supabase Storage', executionId);
     const { error: uploadError } = await supabase.storage.from('ppt-generations').upload(storagePath, pptxBytes, {
       contentType: PPTX_CONTENT_TYPE,
       upsert: true,
@@ -286,11 +292,23 @@ async function updateStatus(
   errorMessage: string | null,
   progress: number,
   phase: string,
+  executionId: string,
 ): Promise<void> {
   const job = await getExistingJob(supabase, jobId);
   const request = isRecord(job.request) ? job.request : {};
   const { error } = await supabase.from('generation_jobs').update({
-    request: { ...request, pptxGeneration: { status, errorMessage, progress, phase, updatedAt: new Date().toISOString() } },
+    request: {
+      ...request,
+      pptxGeneration: {
+        status,
+        errorMessage,
+        progress,
+        phase,
+        executor: 'netlify-worker',
+        executionId,
+        updatedAt: new Date().toISOString(),
+      },
+    },
     updated_at: new Date().toISOString(),
   }).eq('id', jobId);
   if (error) throw error;

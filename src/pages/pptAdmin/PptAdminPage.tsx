@@ -184,9 +184,14 @@ export function PptAdminPage() {
     }
   };
 
-  const handleGeneratePptx = async (job: AdminGenerationJob) => {
-    if (isPptxGenerationInProgress(job, exportingJobId)) {
+  const handleGeneratePptx = async (job: AdminGenerationJob, restart = false) => {
+    const isGenerating = isPptxGenerationInProgress(job, exportingJobId);
+    if (isGenerating && !restart) {
       toast.info('PPTX is already being generated.');
+      return;
+    }
+
+    if (isGenerating && !window.confirm('Restart PPTX generation? The current worker may still be running, but this creates a new Netlify worker attempt.')) {
       return;
     }
 
@@ -203,7 +208,7 @@ export function PptAdminPage() {
 
     setExportingJobId(job.id);
     try {
-      if (isPptxGenerationStale(job)) {
+      if (isGenerating || isPptxGenerationStale(job)) {
         toast.info('The previous PPTX worker stopped updating. Starting a new PPTX job.');
       }
       const imageDeck = createImageDeckFromJob(job);
@@ -318,6 +323,7 @@ export function PptAdminPage() {
                         ) : (
                           <Badge>PPTX Not Generated</Badge>
                         )}
+                        {job.pptxExecutor ? <Badge>{job.pptxExecutor === 'netlify-worker' ? 'Netlify Worker' : 'Legacy Supabase'}</Badge> : null}
                       </div>
                       <p className="mt-1 text-xs text-text-subtle">
                         {format(new Date(job.createdAt), 'yyyy-MM-dd HH:mm')} · {job.completedItems}/{job.totalItems} slides ·{' '}
@@ -369,21 +375,23 @@ export function PptAdminPage() {
                         disabled={
                           isLegacyCopyPlan(job)
                             ? !canRebuildLegacyJob(job)
-                            : isPptxGenerationInProgress(job, exportingJobId) || job.status !== 'succeeded'
+                            : exportingJobId === job.id || job.status !== 'succeeded'
                         }
                         onClick={() => {
                           if (isLegacyCopyPlan(job)) {
                             handleRebuildLegacyJob(job);
                             return;
                           }
-                          void handleGeneratePptx(job);
+                          void handleGeneratePptx(job, isPptxGenerationInProgress(job, exportingJobId));
                         }}
                       >
                         <Download className="h-4 w-4" />
                         {isLegacyCopyPlan(job)
                           ? 'Rebuild in PPT Maker'
-                          : isPptxGenerationInProgress(job, exportingJobId)
-                            ? 'Generating PPTX'
+                          : exportingJobId === job.id
+                            ? 'Starting PPTX'
+                            : isPptxGenerationInProgress(job, exportingJobId)
+                              ? 'Restart PPTX'
                             : isPptxGenerationStale(job)
                               ? 'Retry PPTX'
                             : job.pptxUrl
