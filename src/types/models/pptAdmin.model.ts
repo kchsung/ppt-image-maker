@@ -27,6 +27,9 @@ export interface AdminGenerationJob {
   pptxUrl: string | null;
   pptxStatus?: 'not-started' | 'processing' | 'succeeded' | 'failed';
   pptxErrorMessage?: string | null;
+  pptxProgress?: number;
+  pptxPhase?: string | null;
+  pptxUpdatedAt?: string | null;
   items: AdminGenerationItem[];
 }
 

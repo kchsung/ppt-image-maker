@@ -44,6 +44,8 @@ Deno.serve(async (req) => {
       return json({ error: 'deckPlan with slides is required.' }, 400);
     }
 
+    logJobEvent('job.create.requested', { deckPlanId: deckPlan.id, slideCount: deckPlan.slides.length });
+
     const supabase = createAdminClient();
     const { data: job, error: jobError } = await supabase
       .from('generation_jobs')
@@ -61,6 +63,7 @@ Deno.serve(async (req) => {
     if (jobError || !job) {
       throw jobError ?? new Error('Failed to create generation job.');
     }
+    logJobEvent('job.create.persisted', { jobId: job.id, totalItems: job.total_items });
 
     const itemRows = deckPlan.slides.map((slide) => ({
       job_id: job.id,
@@ -83,6 +86,7 @@ Deno.serve(async (req) => {
     if (itemsError || !items) {
       throw itemsError ?? new Error('Failed to create generation job items.');
     }
+    logJobEvent('job.create.ready', { jobId: job.id, itemCount: items.length });
 
     return json(
       {
@@ -99,9 +103,17 @@ Deno.serve(async (req) => {
       202,
     );
   } catch (error) {
+    console.error(JSON.stringify({
+      event: 'job.create.failed',
+      error: error instanceof Error ? error.message : 'Unknown error',
+    }));
     return json({ error: error instanceof Error ? error.message : 'Unknown error' }, 500);
   }
 });
+
+function logJobEvent(event: string, details: Record<string, string | number>): void {
+  console.info(JSON.stringify({ event, ...details }));
+}
 
 function createAdminClient() {
   const supabaseUrl = Deno.env.get('SUPABASE_URL');

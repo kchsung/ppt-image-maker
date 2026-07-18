@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { format } from 'date-fns';
 import { ChevronLeft, ChevronRight, Download, ExternalLink, Play, RefreshCcw, RotateCcw, Trash2 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
@@ -37,6 +37,7 @@ export function PptAdminPage() {
   const [exportingJobId, setExportingJobId] = useState<string | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const retryQueuesRef = useRef(new Map<string, Promise<void>>());
+  const pptxStatusesRef = useRef(new Map<string, AdminGenerationJob['pptxStatus']>());
   const isLoading = status === 'loading';
 
   const pageCount = Math.max(1, Math.ceil(summary.jobs.length / JOBS_PER_PAGE));
@@ -55,20 +56,38 @@ export function PptAdminPage() {
     [summary.jobs],
   );
 
-  const loadJobs = async () => {
-    setStatus('loading');
+  const loadJobs = useCallback(async (silent = false) => {
+    if (!silent) setStatus('loading');
     try {
-      setSummary(await pptAdminService.listGenerationJobs());
+      const nextSummary = await pptAdminService.listGenerationJobs();
+      nextSummary.jobs.forEach((job) => {
+        const previousStatus = pptxStatusesRef.current.get(job.id);
+        if (previousStatus === 'processing' && job.pptxStatus === 'succeeded') {
+          toast.success(`${job.title} PPTX is ready.`);
+        }
+        if (previousStatus === 'processing' && job.pptxStatus === 'failed') {
+          toast.error(`${job.title} PPTX generation failed.`);
+        }
+        pptxStatusesRef.current.set(job.id, job.pptxStatus);
+      });
+      setSummary(nextSummary);
       setStatus('idle');
     } catch (error) {
       setStatus('failed');
       toast.error(error instanceof Error ? error.message : 'Failed to load generation jobs.');
     }
-  };
+  }, []);
 
   useEffect(() => {
     void loadJobs();
-  }, []);
+  }, [loadJobs]);
+
+  const hasPptxGenerationInProgress = summary.jobs.some((job) => job.pptxStatus === 'processing');
+  useEffect(() => {
+    if (!hasPptxGenerationInProgress) return;
+    const timer = window.setInterval(() => void loadJobs(true), 5_000);
+    return () => window.clearInterval(timer);
+  }, [hasPptxGenerationInProgress, loadJobs]);
 
   useEffect(() => {
     setCurrentPage((page) => Math.min(page, pageCount));
@@ -299,9 +318,19 @@ export function PptAdminPage() {
                         {job.progress}%
                       </p>
                       {exportingJobId === job.id || job.pptxStatus === 'processing' ? (
-                        <p className="mt-1 text-xs font-semibold text-primary">
-                          PPTX is being prepared and uploaded to Supabase Storage.
-                        </p>
+                        <div className="mt-2 max-w-md">
+                          <div className="flex items-center justify-between gap-3 text-xs font-semibold text-primary">
+                            <span>{job.pptxPhase ?? 'Preparing the editable PPTX'}</span>
+                            <span>{job.pptxProgress ?? 0}%</span>
+                          </div>
+                          <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-surface-muted">
+                            <div
+                              className="h-full rounded-full bg-primary transition-[width] duration-500"
+                              style={{ width: `${Math.max(5, job.pptxProgress ?? 5)}%` }}
+                            />
+                          </div>
+                          <p className="mt-1 text-xs text-text-subtle">This list refreshes automatically while the file is being created.</p>
+                        </div>
                       ) : null}
                       {job.pptxStatus === 'failed' && job.pptxErrorMessage ? (
                         <p className="mt-1 text-xs font-semibold text-accent">PPTX generation failed: {job.pptxErrorMessage}</p>

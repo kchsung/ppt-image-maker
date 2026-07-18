@@ -55,9 +55,6 @@ Deno.serve(async (req) => {
   if (req.method !== 'POST') return json({ error: 'Method not allowed' }, 405);
 
   try {
-    const apiKey = Deno.env.get('CLAUDE_API_KEY');
-    if (!apiKey) return json({ error: 'CLAUDE_API_KEY is not configured.' }, 500);
-
     const body = await req.json() as RequestBody;
     if (!body.deckPlan || !body.imageDeck?.images?.length) {
       return json({ error: 'deckPlan and generated slide images are required.' }, 400);
@@ -66,19 +63,30 @@ Deno.serve(async (req) => {
     const jobId = body.imageDeck.generationJobId;
     if (!jobId) return json({ error: 'A Supabase generation job is required to save the final PPTX.' }, 400);
 
-    const supabase = createAdminClient();
-    await updatePptxGenerationStatus(supabase, jobId, 'processing');
+    const workerUrl = Deno.env.get('NETLIFY_PPT_WORKER_URL');
+    const workerSecret = Deno.env.get('PPT_WORKER_SECRET');
+    if (!workerUrl || !workerSecret) {
+      return json({ error: 'NETLIFY_PPT_WORKER_URL and PPT_WORKER_SECRET must be configured before generating a PPTX.' }, 503);
+    }
 
-    EdgeRuntime.waitUntil(
-      generateNativePptx(apiKey, body.deckPlan, body.imageDeck.images, jobId, supabase)
-        .then(() => updatePptxGenerationStatus(supabase, jobId, 'succeeded'))
-        .catch((error) => updatePptxGenerationStatus(
-          supabase,
-          jobId,
-          'failed',
-          error instanceof Error ? error.message : 'Claude native PPTX generation failed.',
-        )),
-    );
+    const supabase = createAdminClient();
+    logPptxEvent('pptx.requested', { jobId, slideCount: body.imageDeck.images.length });
+    await updatePptxGenerationStatus(supabase, jobId, 'processing', null, 5, 'Queued for Netlify PPTX worker');
+    const workerResponse = await fetch(workerUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Ppt-Worker-Secret': workerSecret,
+      },
+      body: JSON.stringify({ deckPlan: body.deckPlan, imageDeck: body.imageDeck }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!workerResponse.ok) {
+      const message = `Netlify PPTX worker could not accept the job (${workerResponse.status}).`;
+      await updatePptxGenerationStatus(supabase, jobId, 'failed', message, 0, 'PPTX worker dispatch failed');
+      return json({ error: message }, 502);
+    }
+    logPptxEvent('pptx.worker_accepted', { jobId, status: workerResponse.status });
 
     return json({
       title: body.deckPlan.title,
@@ -86,7 +94,7 @@ Deno.serve(async (req) => {
       generationMode: 'claude-native-pending',
       pptxStatus: 'processing',
       speakerNotes: [],
-      qaChecklist: ['Claude is creating the native editable PPTX in the background.'],
+      qaChecklist: ['Netlify is creating the native editable PPTX in the background.'],
       layouts: [],
       layoutSource: 'claude',
     }, 202);
@@ -104,6 +112,8 @@ async function generateNativePptx(
 ): Promise<void> {
   const uploadedFileIds: string[] = [];
   try {
+    logPptxEvent('pptx.uploading_references', { jobId, slideCount: slideImages.length });
+    await updatePptxGenerationStatus(supabase, jobId, 'processing', null, 15, 'Uploading slide references to Claude');
     const images = slideImages.slice().sort((left, right) => left.pageNumber - right.pageNumber);
     if (images.length !== deckPlan.slides.length) {
       throw new Error('Every approved slide needs a generated reference image.');
@@ -119,17 +129,23 @@ async function generateNativePptx(
       : null;
     if (logoUpload) uploadedFileIds.push(logoUpload.id);
 
+    logPptxEvent('pptx.claude_rebuild_started', { jobId });
+    await updatePptxGenerationStatus(supabase, jobId, 'processing', null, 35, 'Claude is rebuilding editable slides');
     const model = Deno.env.get('CLAUDE_MODEL') ?? 'claude-sonnet-5';
     const response = await createNativePresentation(apiKey, model, deckPlan, uploads, logoUpload);
     const pptxFileId = await findGeneratedPptxFile(apiKey, response);
+    logPptxEvent('pptx.claude_file_ready', { jobId });
+    await updatePptxGenerationStatus(supabase, jobId, 'processing', null, 80, 'Downloading the generated PPTX');
     const pptxBytes = await downloadClaudeFile(apiKey, pptxFileId);
     const fileName = createFileName(deckPlan.title);
     const storagePath = `${jobId}/final/${fileName}`;
+    await updatePptxGenerationStatus(supabase, jobId, 'processing', null, 92, 'Saving the PPTX to Supabase Storage');
     const { error: uploadError } = await supabase.storage.from('ppt-generations').upload(storagePath, pptxBytes, {
       contentType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
       upsert: true,
     });
     if (uploadError) throw uploadError;
+    logPptxEvent('pptx.storage_saved', { jobId });
 
     const resultPath = `ppt-generations/${storagePath}`;
     const { error: updateError } = await supabase
@@ -137,6 +153,7 @@ async function generateNativePptx(
       .update({ result_path: resultPath, error_message: null, updated_at: new Date().toISOString() })
       .eq('id', jobId);
     if (updateError) throw updateError;
+    await updatePptxGenerationStatus(supabase, jobId, 'processing', null, 98, 'Finalizing the editable PPTX');
     await deleteClaudeFile(apiKey, pptxFileId);
   } finally {
     await Promise.all(uploadedFileIds.map((fileId) => deleteClaudeFile(apiKey, fileId)));
@@ -148,6 +165,8 @@ async function updatePptxGenerationStatus(
   jobId: string,
   status: 'processing' | 'succeeded' | 'failed',
   errorMessage: string | null = null,
+  progress = status === 'succeeded' ? 100 : 0,
+  phase = status === 'succeeded' ? 'Ready to preview and download' : 'Processing',
 ): Promise<void> {
   const { data: job, error: readError } = await supabase
     .from('generation_jobs')
@@ -162,7 +181,7 @@ async function updatePptxGenerationStatus(
     .update({
       request: {
         ...request,
-        pptxGeneration: { status, errorMessage, updatedAt: new Date().toISOString() },
+        pptxGeneration: { status, errorMessage, progress, phase, updatedAt: new Date().toISOString() },
       },
       updated_at: new Date().toISOString(),
     })
@@ -346,6 +365,10 @@ function base64ToBytes(value: string): Uint8Array {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
+}
+
+function logPptxEvent(event: string, details: Record<string, string | number>): void {
+  console.info(JSON.stringify({ event, ...details }));
 }
 
 function json(data: unknown, status = 200): Response {

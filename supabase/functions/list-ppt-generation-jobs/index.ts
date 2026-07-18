@@ -13,6 +13,9 @@ type JobRow = {
     pptxGeneration?: {
       status?: 'processing' | 'succeeded' | 'failed';
       errorMessage?: string | null;
+      progress?: number;
+      phase?: string;
+      updatedAt?: string;
     };
   };
   error_message: string | null;
@@ -97,6 +100,9 @@ Deno.serve(async (req) => {
         pptxUrl: getPublicImageUrl(supabase, job.result_path),
         pptxStatus: job.result_path ? 'succeeded' : job.request?.pptxGeneration?.status ?? 'not-started',
         pptxErrorMessage: job.request?.pptxGeneration?.errorMessage ?? null,
+        pptxProgress: job.result_path ? 100 : job.request?.pptxGeneration?.progress ?? 0,
+        pptxPhase: job.result_path ? 'Ready to preview and download' : job.request?.pptxGeneration?.phase ?? null,
+        pptxUpdatedAt: job.request?.pptxGeneration?.updatedAt ?? null,
         items: (itemsByJob.get(job.id) ?? []).map((item) => ({
           id: item.id,
           pageNumber: item.item_index,

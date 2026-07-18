@@ -78,6 +78,7 @@ Deno.serve(async (req) => {
     const body = (await req.json()) as GenerateSlideImageBody;
     jobId = body.jobId;
     itemId = body.itemId;
+    console.info(JSON.stringify({ event: 'slide_image.requested', jobId: jobId ?? null, itemId: itemId ?? null }));
     supabaseAdmin = createOptionalAdminClient();
     const { deckPlan, slide } = await resolveGenerationInput(supabaseAdmin, body);
 
@@ -90,6 +91,7 @@ Deno.serve(async (req) => {
     const imageModel = Deno.env.get('OPENAI_IMAGE_MODEL') ?? 'gpt-image-2';
 
     await markProcessing(supabaseAdmin, jobId, itemId);
+    console.info(JSON.stringify({ event: 'slide_image.generating', jobId: jobId ?? null, itemId: itemId ?? null, pageNumber: slide.pageNumber }));
 
     const prompt = buildSlideImagePrompt(deckPlan, slide);
     const referenceImage = deckPlan.request.styleImageDataUrl;
@@ -99,6 +101,7 @@ Deno.serve(async (req) => {
     const storageResult = await uploadGeneratedImage(supabaseAdmin, jobId, slide, b64);
 
     await markSucceeded(supabaseAdmin, jobId, itemId, storageResult?.path);
+    console.info(JSON.stringify({ event: 'slide_image.completed', jobId: jobId ?? null, itemId: itemId ?? null, pageNumber: slide.pageNumber }));
 
     return json({
       id: `image-${slide.id}`,
@@ -114,6 +117,7 @@ Deno.serve(async (req) => {
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
+    console.error(JSON.stringify({ event: 'slide_image.failed', jobId: jobId ?? null, itemId: itemId ?? null, error: message }));
     await markFailed(supabaseAdmin, jobId, itemId, message);
     if (error instanceof OpenAiImageRateLimitError) {
       return json(
