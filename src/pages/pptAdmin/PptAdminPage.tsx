@@ -185,6 +185,11 @@ export function PptAdminPage() {
     try {
       const imageDeck = createImageDeckFromJob(job);
       const enhancement = await enhancePptDocument(job.deckPlan, imageDeck);
+      if (enhancement.pptxStatus === 'processing') {
+        toast.success('PPTX generation started. The file will appear here when Claude finishes.');
+        await loadJobs();
+        return;
+      }
       if (enhancement.pptxUrl) {
         toast.success('Claude native editable PPTX was saved to Supabase Storage.');
         await loadJobs();
@@ -281,7 +286,7 @@ export function PptAdminPage() {
                         </h3>
                         <Badge>{STATUS_LABELS[job.status]}</Badge>
                         {isLegacyCopyPlan(job) ? <Badge>Legacy Copy</Badge> : null}
-                        {exportingJobId === job.id ? (
+                        {exportingJobId === job.id || job.pptxStatus === 'processing' ? (
                           <Badge>PPTX Generating</Badge>
                         ) : job.pptxUrl ? (
                           <Badge>PPTX Ready</Badge>
@@ -293,10 +298,13 @@ export function PptAdminPage() {
                         {format(new Date(job.createdAt), 'yyyy-MM-dd HH:mm')} · {job.completedItems}/{job.totalItems} slides ·{' '}
                         {job.progress}%
                       </p>
-                      {exportingJobId === job.id ? (
+                      {exportingJobId === job.id || job.pptxStatus === 'processing' ? (
                         <p className="mt-1 text-xs font-semibold text-primary">
                           PPTX is being prepared and uploaded to Supabase Storage.
                         </p>
+                      ) : null}
+                      {job.pptxStatus === 'failed' && job.pptxErrorMessage ? (
+                        <p className="mt-1 text-xs font-semibold text-accent">PPTX generation failed: {job.pptxErrorMessage}</p>
                       ) : null}
                       {isLegacyCopyPlan(job) ? (
                         <p className="mt-1 text-xs font-semibold text-accent">
@@ -321,7 +329,7 @@ export function PptAdminPage() {
                         disabled={
                           isLegacyCopyPlan(job)
                             ? !canRebuildLegacyJob(job)
-                            : exportingJobId === job.id || job.status !== 'succeeded'
+                            : exportingJobId === job.id || job.pptxStatus === 'processing' || job.status !== 'succeeded'
                         }
                         onClick={() => {
                           if (isLegacyCopyPlan(job)) {
@@ -334,13 +342,13 @@ export function PptAdminPage() {
                         <Download className="h-4 w-4" />
                         {isLegacyCopyPlan(job)
                           ? 'Rebuild in PPT Maker'
-                          : exportingJobId === job.id
+                          : exportingJobId === job.id || job.pptxStatus === 'processing'
                             ? 'Generating PPTX'
                             : job.pptxUrl
                               ? 'Regenerate PPTX'
                               : 'Generate PPTX'}
                       </Button>
-                      {job.pptxUrl && exportingJobId !== job.id ? (
+                      {job.pptxUrl && exportingJobId !== job.id && job.pptxStatus !== 'processing' ? (
                         <>
                           <a
                             href={getPptPreviewUrl(job.pptxUrl)}

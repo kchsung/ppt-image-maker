@@ -54,7 +54,6 @@ Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
   if (req.method !== 'POST') return json({ error: 'Method not allowed' }, 405);
 
-  const uploadedFileIds: string[] = [];
   try {
     const apiKey = Deno.env.get('CLAUDE_API_KEY');
     if (!apiKey) return json({ error: 'CLAUDE_API_KEY is not configured.' }, 500);
@@ -67,9 +66,47 @@ Deno.serve(async (req) => {
     const jobId = body.imageDeck.generationJobId;
     if (!jobId) return json({ error: 'A Supabase generation job is required to save the final PPTX.' }, 400);
 
-    const images = body.imageDeck.images.slice().sort((left, right) => left.pageNumber - right.pageNumber);
-    if (images.length !== body.deckPlan.slides.length) {
-      return json({ error: 'Every approved slide needs a generated reference image.' }, 400);
+    const supabase = createAdminClient();
+    await updatePptxGenerationStatus(supabase, jobId, 'processing');
+
+    EdgeRuntime.waitUntil(
+      generateNativePptx(apiKey, body.deckPlan, body.imageDeck.images, jobId, supabase)
+        .then(() => updatePptxGenerationStatus(supabase, jobId, 'succeeded'))
+        .catch((error) => updatePptxGenerationStatus(
+          supabase,
+          jobId,
+          'failed',
+          error instanceof Error ? error.message : 'Claude native PPTX generation failed.',
+        )),
+    );
+
+    return json({
+      title: body.deckPlan.title,
+      fileName: createFileName(body.deckPlan.title),
+      generationMode: 'claude-native-pending',
+      pptxStatus: 'processing',
+      speakerNotes: [],
+      qaChecklist: ['Claude is creating the native editable PPTX in the background.'],
+      layouts: [],
+      layoutSource: 'claude',
+    }, 202);
+  } catch (error) {
+    return json({ error: error instanceof Error ? error.message : 'Claude native PPTX generation failed.' }, 500);
+  }
+});
+
+async function generateNativePptx(
+  apiKey: string,
+  deckPlan: DeckPlan,
+  slideImages: SlideImage[],
+  jobId: string,
+  supabase: SupabaseClient,
+): Promise<void> {
+  const uploadedFileIds: string[] = [];
+  try {
+    const images = slideImages.slice().sort((left, right) => left.pageNumber - right.pageNumber);
+    if (images.length !== deckPlan.slides.length) {
+      throw new Error('Every approved slide needs a generated reference image.');
     }
 
     const uploads = await Promise.all(images.map(async (image) => {
@@ -77,19 +114,17 @@ Deno.serve(async (req) => {
       uploadedFileIds.push(file.id);
       return { pageNumber: image.pageNumber, fileId: file.id, fileName: file.filename };
     }));
-    const logoUpload = body.deckPlan.request.logoImageDataUrl
-      ? await uploadSourceFile(apiKey, body.deckPlan.request.logoImageDataUrl, 'logo.png')
+    const logoUpload = deckPlan.request.logoImageDataUrl
+      ? await uploadSourceFile(apiKey, deckPlan.request.logoImageDataUrl, 'logo.png')
       : null;
     if (logoUpload) uploadedFileIds.push(logoUpload.id);
 
     const model = Deno.env.get('CLAUDE_MODEL') ?? 'claude-sonnet-5';
-    const response = await createNativePresentation(apiKey, model, body.deckPlan, uploads, logoUpload);
+    const response = await createNativePresentation(apiKey, model, deckPlan, uploads, logoUpload);
     const pptxFileId = await findGeneratedPptxFile(apiKey, response);
     const pptxBytes = await downloadClaudeFile(apiKey, pptxFileId);
-    const supabase = createAdminClient();
-    const fileName = createFileName(body.deckPlan.title);
+    const fileName = createFileName(deckPlan.title);
     const storagePath = `${jobId}/final/${fileName}`;
-
     const { error: uploadError } = await supabase.storage.from('ppt-generations').upload(storagePath, pptxBytes, {
       contentType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
       upsert: true,
@@ -102,33 +137,38 @@ Deno.serve(async (req) => {
       .update({ result_path: resultPath, error_message: null, updated_at: new Date().toISOString() })
       .eq('id', jobId);
     if (updateError) throw updateError;
-
-    const { data } = supabase.storage.from('ppt-generations').getPublicUrl(storagePath);
     await deleteClaudeFile(apiKey, pptxFileId);
-    return json({
-      title: body.deckPlan.title,
-      fileName,
-      pptxUrl: data.publicUrl,
-      resultPath,
-      generationMode: 'claude-native',
-      speakerNotes: body.deckPlan.slides.map((slide) => ({ pageNumber: slide.pageNumber, note: slide.mainMessage })),
-      qaChecklist: [
-        'Claude pptx skill rebuilt the final document from the generated slide references.',
-        'Approved titles, subtitles, labels, and takeaways were recreated as native editable PowerPoint text.',
-        'Complex visual assets remain raster only when native reconstruction would reduce fidelity.',
-      ],
-      layouts: [],
-      layoutSource: 'claude',
-    });
-  } catch (error) {
-    return json({ error: error instanceof Error ? error.message : 'Claude native PPTX generation failed.' }, 500);
   } finally {
-    if (uploadedFileIds.length > 0) {
-      const apiKey = Deno.env.get('CLAUDE_API_KEY');
-      if (apiKey) await Promise.all(uploadedFileIds.map((fileId) => deleteClaudeFile(apiKey, fileId)));
-    }
+    await Promise.all(uploadedFileIds.map((fileId) => deleteClaudeFile(apiKey, fileId)));
   }
-});
+}
+
+async function updatePptxGenerationStatus(
+  supabase: SupabaseClient,
+  jobId: string,
+  status: 'processing' | 'succeeded' | 'failed',
+  errorMessage: string | null = null,
+): Promise<void> {
+  const { data: job, error: readError } = await supabase
+    .from('generation_jobs')
+    .select('request')
+    .eq('id', jobId)
+    .single();
+  if (readError) throw readError;
+
+  const request = isRecord(job?.request) ? job.request : {};
+  const { error: updateError } = await supabase
+    .from('generation_jobs')
+    .update({
+      request: {
+        ...request,
+        pptxGeneration: { status, errorMessage, updatedAt: new Date().toISOString() },
+      },
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', jobId);
+  if (updateError) throw updateError;
+}
 
 async function uploadImageFile(apiKey: string, image: SlideImage): Promise<{ id: string; filename: string }> {
   const source = image.imageDataUrl ?? image.imageUrl;

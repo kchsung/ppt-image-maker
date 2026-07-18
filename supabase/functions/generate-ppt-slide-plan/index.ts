@@ -107,10 +107,21 @@ Deno.serve(async (req) => {
     const model = Deno.env.get('CLAUDE_MODEL') ?? 'claude-sonnet-5';
     const initialDraft = await requestCopyPlan(apiKey, model, request, []);
     const initialIssues = validateCopyPlan(initialDraft, request);
-    const repairedDraft = initialIssues.length > 0
+    let repairedDraft = initialIssues.length > 0
       ? await requestCopyPlan(apiKey, model, request, initialIssues, initialDraft)
       : initialDraft;
-    const issues = validateCopyPlan(repairedDraft, request);
+    let issues = validateCopyPlan(repairedDraft, request);
+
+    // A title-only failure is inexpensive to repair and should not discard an otherwise usable deck.
+    if (hasOnlyTitleLengthIssues(issues)) {
+      repairedDraft = await requestCopyPlan(apiKey, model, request, issues, repairedDraft);
+      issues = validateCopyPlan(repairedDraft, request);
+    }
+
+    if (hasOnlyTitleLengthIssues(issues)) {
+      repairedDraft = fitTitlesToEditableLayout(repairedDraft, request.targetLanguage);
+      issues = validateCopyPlan(repairedDraft, request);
+    }
 
     if (issues.length > 0) {
       return json({ error: `Slide copy QA failed: ${issues[0]}`, issues }, 422);
@@ -415,6 +426,46 @@ function containsHangul(value: string): boolean {
 function isTitleTooLong(value: string, targetLanguage: TargetLanguage): boolean {
   const compact = value.replace(/\s+/g, ' ').trim();
   return targetLanguage === 'Korean' ? compact.length > 22 : compact.length > 42;
+}
+
+function hasOnlyTitleLengthIssues(issues: string[]): boolean {
+  return issues.length > 0 && issues.every((issue) => /title is too long for the editable layout\.$/u.test(issue));
+}
+
+function fitTitlesToEditableLayout(slides: DraftSlide[], targetLanguage: TargetLanguage): DraftSlide[] {
+  return slides.map((slide) => ({
+    ...slide,
+    title: fitTitleToEditableLayout(slide.title, targetLanguage),
+  }));
+}
+
+function fitTitleToEditableLayout(title: string, targetLanguage: TargetLanguage): string {
+  const limit = targetLanguage === 'Korean' ? 22 : 42;
+  const compact = title.replace(/\s+/g, ' ').trim();
+  if (compact.length <= limit) {
+    return compact;
+  }
+
+  const firstClause = compact.split(/[,:;.!?\u2013\u2014]/u)[0]?.trim() || compact;
+  if (firstClause.length <= limit) {
+    return firstClause;
+  }
+
+  const words = firstClause.split(/\s+/u);
+  const fittedWords: string[] = [];
+  for (const word of words) {
+    const candidate = [...fittedWords, word].join(' ');
+    if (candidate.length > limit) {
+      break;
+    }
+    fittedWords.push(word);
+  }
+
+  if (fittedWords.length > 0) {
+    return fittedWords.join(' ');
+  }
+
+  return firstClause.slice(0, limit).trim();
 }
 
 function isValidRequest(value: unknown): value is PptMakerRequest {

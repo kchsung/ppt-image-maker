@@ -27,7 +27,7 @@ export async function enhancePptDocument(
       );
     }
 
-    if (!data.pptxUrl || !data.resultPath) {
+    if (!data.pptxUrl && data.pptxStatus !== 'processing') {
       throw new Error('Claude native PPTX generation completed without an exported PPTX file.');
     }
 

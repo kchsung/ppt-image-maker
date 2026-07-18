@@ -25,6 +25,8 @@ export interface AdminGenerationJob {
   deckPlan: PptDeckPlan | null;
   resultPath: string | null;
   pptxUrl: string | null;
+  pptxStatus?: 'not-started' | 'processing' | 'succeeded' | 'failed';
+  pptxErrorMessage?: string | null;
   items: AdminGenerationItem[];
 }
 

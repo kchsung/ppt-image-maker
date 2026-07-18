@@ -126,7 +126,8 @@ export interface PptDocumentEnhancement {
   fileName: string;
   pptxUrl?: string;
   resultPath?: string;
-  generationMode?: 'claude-native' | 'browser-fallback';
+  generationMode?: 'claude-native' | 'claude-native-pending' | 'browser-fallback';
+  pptxStatus?: 'processing' | 'succeeded' | 'failed';
   speakerNotes: Array<{
     pageNumber: number;
     note: string;

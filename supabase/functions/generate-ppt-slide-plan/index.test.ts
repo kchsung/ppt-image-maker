@@ -187,6 +187,30 @@ describe('generate-ppt-slide-plan Edge Function', () => {
     expect(body.slides[0].title).toBe('AI Requires Better Judgment');
   });
 
+  it('requests a focused second repair when a title remains too long after the first repair', async () => {
+    const longTitle = 'A Very Long Presentation Heading That Cannot Fit Inside A Two Line Editable Layout Box';
+    fetchMock
+      .mockResolvedValueOnce(claudeResponse([{
+        ...createSlide('AI changes execution, so students must strengthen their judgment.'),
+        title: longTitle,
+      }]))
+      .mockResolvedValueOnce(claudeResponse([{
+        ...createSlide('AI changes execution, so students must strengthen their judgment.'),
+        title: longTitle,
+      }]))
+      .mockResolvedValueOnce(claudeResponse([createSlide('AI changes execution, so students must strengthen their judgment.')]));
+
+    const response = await handler!(new Request('http://localhost', {
+      method: 'POST',
+      body: JSON.stringify(requestBody),
+    }));
+
+    const body = await response.json() as { slides: Array<{ title: string }> };
+    expect(response.status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(body.slides[0].title).toBe('AI Requires Better Judgment');
+  });
+
   it('repairs repeated layouts into a varied visual story before image generation', async () => {
     const fourSlideRequest = {
       request: {

@@ -10,6 +10,10 @@ type JobRow = {
     deckPlan?: {
       title?: string;
     };
+    pptxGeneration?: {
+      status?: 'processing' | 'succeeded' | 'failed';
+      errorMessage?: string | null;
+    };
   };
   error_message: string | null;
   result_path: string | null;
@@ -91,6 +95,8 @@ Deno.serve(async (req) => {
         deckPlan: job.request?.deckPlan ?? null,
         resultPath: job.result_path,
         pptxUrl: getPublicImageUrl(supabase, job.result_path),
+        pptxStatus: job.result_path ? 'succeeded' : job.request?.pptxGeneration?.status ?? 'not-started',
+        pptxErrorMessage: job.request?.pptxGeneration?.errorMessage ?? null,
         items: (itemsByJob.get(job.id) ?? []).map((item) => ({
           id: item.id,
           pageNumber: item.item_index,

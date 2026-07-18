@@ -40,8 +40,12 @@ export function PptMakerPage() {
       .then(({ generatedDeckPlan, generatedImageDeck }) =>
         dispatch(enhanceGeneratedPptDocument({ deckPlan: generatedDeckPlan, imageDeck: generatedImageDeck })).unwrap(),
       )
-      .then(() => {
-        toast.success('Editable PPTX generated.');
+      .then((enhancement) => {
+        toast.success(
+          enhancement.pptxStatus === 'processing'
+            ? 'PPTX generation started. Check the List page when it is ready.'
+            : 'Editable PPTX generated.',
+        );
       })
       .catch(() => toast.error('PPT generation failed.'));
   };
