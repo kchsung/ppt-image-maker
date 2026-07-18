@@ -15,6 +15,7 @@ import { resetDeckPlan, updateForm } from '@/features/pptMaker/pptMakerSlice';
 import { useAppDispatch } from '@/hooks/redux';
 import type { GeneratedImageDeck, GeneratedSlideImage } from '@/types/models/pptMaker.model';
 import type { AdminGenerationItem, AdminGenerationJob, AdminGenerationSummary } from '@/types/models/pptAdmin.model';
+import { isPptxGenerationInProgress, isPptxGenerationStale } from '@/utils/pptxGeneration';
 
 const STATUS_LABELS: Record<AdminGenerationJob['status'], string> = {
   pending: 'Pending',
@@ -82,7 +83,7 @@ export function PptAdminPage() {
     void loadJobs();
   }, [loadJobs]);
 
-  const hasPptxGenerationInProgress = summary.jobs.some((job) => job.pptxStatus === 'processing');
+  const hasPptxGenerationInProgress = summary.jobs.some((job) => isPptxGenerationInProgress(job, exportingJobId));
   useEffect(() => {
     if (!hasPptxGenerationInProgress) return;
     const timer = window.setInterval(() => void loadJobs(true), 5_000);
@@ -184,7 +185,7 @@ export function PptAdminPage() {
   };
 
   const handleGeneratePptx = async (job: AdminGenerationJob) => {
-    if (exportingJobId === job.id) {
+    if (isPptxGenerationInProgress(job, exportingJobId)) {
       toast.info('PPTX is already being generated.');
       return;
     }
@@ -202,6 +203,9 @@ export function PptAdminPage() {
 
     setExportingJobId(job.id);
     try {
+      if (isPptxGenerationStale(job)) {
+        toast.info('The previous PPTX worker stopped updating. Starting a new PPTX job.');
+      }
       const imageDeck = createImageDeckFromJob(job);
       const enhancement = await enhancePptDocument(job.deckPlan, imageDeck);
       if (enhancement.pptxStatus === 'processing') {
@@ -305,8 +309,10 @@ export function PptAdminPage() {
                         </h3>
                         <Badge>{STATUS_LABELS[job.status]}</Badge>
                         {isLegacyCopyPlan(job) ? <Badge>Legacy Copy</Badge> : null}
-                        {exportingJobId === job.id || job.pptxStatus === 'processing' ? (
+                        {isPptxGenerationInProgress(job, exportingJobId) ? (
                           <Badge>PPTX Generating</Badge>
+                        ) : isPptxGenerationStale(job) ? (
+                          <Badge>PPTX Interrupted</Badge>
                         ) : job.pptxUrl ? (
                           <Badge>PPTX Ready</Badge>
                         ) : (
@@ -317,7 +323,7 @@ export function PptAdminPage() {
                         {format(new Date(job.createdAt), 'yyyy-MM-dd HH:mm')} · {job.completedItems}/{job.totalItems} slides ·{' '}
                         {job.progress}%
                       </p>
-                      {exportingJobId === job.id || job.pptxStatus === 'processing' ? (
+                      {isPptxGenerationInProgress(job, exportingJobId) ? (
                         <div className="mt-2 max-w-md">
                           <div className="flex items-center justify-between gap-3 text-xs font-semibold text-primary">
                             <span>{job.pptxPhase ?? 'Preparing the editable PPTX'}</span>
@@ -331,6 +337,11 @@ export function PptAdminPage() {
                           </div>
                           <p className="mt-1 text-xs text-text-subtle">This list refreshes automatically while the file is being created.</p>
                         </div>
+                      ) : null}
+                      {isPptxGenerationStale(job) ? (
+                        <p className="mt-1 text-xs font-semibold text-accent">
+                          No PPTX worker update was received for over 20 minutes. Retry the PPTX job to start a new worker.
+                        </p>
                       ) : null}
                       {job.pptxStatus === 'failed' && job.pptxErrorMessage ? (
                         <p className="mt-1 text-xs font-semibold text-accent">PPTX generation failed: {job.pptxErrorMessage}</p>
@@ -358,7 +369,7 @@ export function PptAdminPage() {
                         disabled={
                           isLegacyCopyPlan(job)
                             ? !canRebuildLegacyJob(job)
-                            : exportingJobId === job.id || job.pptxStatus === 'processing' || job.status !== 'succeeded'
+                            : isPptxGenerationInProgress(job, exportingJobId) || job.status !== 'succeeded'
                         }
                         onClick={() => {
                           if (isLegacyCopyPlan(job)) {
@@ -371,13 +382,15 @@ export function PptAdminPage() {
                         <Download className="h-4 w-4" />
                         {isLegacyCopyPlan(job)
                           ? 'Rebuild in PPT Maker'
-                          : exportingJobId === job.id || job.pptxStatus === 'processing'
+                          : isPptxGenerationInProgress(job, exportingJobId)
                             ? 'Generating PPTX'
+                            : isPptxGenerationStale(job)
+                              ? 'Retry PPTX'
                             : job.pptxUrl
                               ? 'Regenerate PPTX'
                               : 'Generate PPTX'}
                       </Button>
-                      {job.pptxUrl && exportingJobId !== job.id && job.pptxStatus !== 'processing' ? (
+                      {job.pptxUrl && !isPptxGenerationInProgress(job, exportingJobId) ? (
                         <>
                           <a
                             href={getPptPreviewUrl(job.pptxUrl)}
