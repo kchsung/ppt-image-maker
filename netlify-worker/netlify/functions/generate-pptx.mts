@@ -1,4 +1,3 @@
-import type { Config } from '@netlify/functions';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 
 type SlidePlan = {
@@ -44,7 +43,7 @@ const PPTX_CONTENT_TYPE = 'application/vnd.openxmlformats-officedocument.present
 const CLAUDE_MESSAGE_TIMEOUT_MS = 12 * 60 * 1_000;
 const STATUS_HEARTBEAT_INTERVAL_MS = 60 * 1_000;
 
-export default async (request: Request): Promise<Response> => {
+export async function runPptxWorker(request: Request): Promise<Response> {
   const secret = process.env.PPT_WORKER_SECRET;
   if (!secret || request.headers.get('x-ppt-worker-secret') !== secret) {
     return Response.json({ error: 'Unauthorized worker request.' }, { status: 401 });
@@ -87,12 +86,9 @@ export default async (request: Request): Promise<Response> => {
     }
     throw error;
   }
-};
+}
 
-export const config: Config = {
-  background: true,
-  path: '/pptx-worker',
-};
+export default runPptxWorker;
 
 async function generateNativePptx(
   apiKey: string,
