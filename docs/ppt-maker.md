@@ -1,5 +1,9 @@
 # PPT Maker Implementation Notes
 
+> Product requirements and acceptance criteria are maintained in
+> [`ppt-maker-product-spec.md`](./ppt-maker-product-spec.md). This document
+> explains the implementation and deployment details that satisfy that contract.
+
 ## Overview
 
 `/ppt-maker` turns source text and a template or sample slide image into an editable PPTX. Claude first creates and validates the slide copy plan, OpenAI generates a complete per-slide visual reference with the approved copy, and Claude's official `pptx` skill rebuilds the final file as a native PowerPoint document.
