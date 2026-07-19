@@ -41,6 +41,8 @@ type WorkerRequest = {
 type ClaudeFile = { id?: string; filename?: string };
 
 const PPTX_CONTENT_TYPE = 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
+const CLAUDE_MESSAGE_TIMEOUT_MS = 12 * 60 * 1_000;
+const STATUS_HEARTBEAT_INTERVAL_MS = 60 * 1_000;
 
 export default async (request: Request): Promise<Response> => {
   const secret = process.env.PPT_WORKER_SECRET;
@@ -119,7 +121,26 @@ async function generateNativePptx(
     if (logoUpload) uploadedFileIds.push(logoUpload.id);
 
     await updateStatus(supabase, jobId, 'processing', null, 35, 'Claude is rebuilding editable slides', executionId);
-    const response = await createNativePresentation(apiKey, deckPlan, uploads, logoUpload);
+    logEvent('pptx.worker.claude_rebuild_started', { jobId, executionId });
+    const heartbeat = setInterval(() => {
+      void updateStatus(supabase, jobId, 'processing', null, 35, 'Claude is rebuilding editable slides', executionId)
+        .then(() => logEvent('pptx.worker.claude_rebuild_heartbeat', { jobId, executionId }))
+        .catch((error: unknown) => {
+          console.error(JSON.stringify({
+            event: 'pptx.worker.heartbeat_failed',
+            jobId,
+            executionId,
+            error: error instanceof Error ? error.message : 'Unable to update PPTX progress.',
+          }));
+        });
+    }, STATUS_HEARTBEAT_INTERVAL_MS);
+
+    let response: Record<string, unknown>;
+    try {
+      response = await createNativePresentation(apiKey, deckPlan, uploads, logoUpload);
+    } finally {
+      clearInterval(heartbeat);
+    }
     const pptxFileId = await findGeneratedPptxFile(apiKey, response);
 
     await updateStatus(supabase, jobId, 'processing', null, 80, 'Downloading the generated PPTX', executionId);
@@ -232,9 +253,20 @@ async function uploadSourceFile(apiKey: string, source: string | undefined, defa
 }
 
 async function sendClaudeMessage(apiKey: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
-  const response = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST', headers: { ...anthropicHeaders(apiKey), 'Content-Type': 'application/json' }, body: JSON.stringify(body),
-  });
+  let response: Response;
+  try {
+    response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { ...anthropicHeaders(apiKey), 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(CLAUDE_MESSAGE_TIMEOUT_MS),
+    });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'TimeoutError') {
+      throw new Error('Claude PPTX generation did not respond within 12 minutes. Retry the PPTX job.');
+    }
+    throw error;
+  }
   const payload = await response.json() as Record<string, unknown> & { error?: { message?: string } };
   if (!response.ok) throw new Error(payload.error?.message ?? 'Claude pptx skill request failed.');
   return payload;
