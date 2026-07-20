@@ -13,4 +13,5 @@ export default async (request: Request): Promise<void> => {
 
 export const config: Config = {
   path: '/pptx-worker',
+  background: true,
 };

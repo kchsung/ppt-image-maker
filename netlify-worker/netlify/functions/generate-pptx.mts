@@ -40,7 +40,11 @@ type WorkerRequest = {
 type ClaudeFile = { id?: string; filename?: string };
 
 const PPTX_CONTENT_TYPE = 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
-const CLAUDE_MESSAGE_TIMEOUT_MS = 12 * 60 * 1_000;
+// Keep each Claude request below the upstream connection window. A complete
+// deck is rebuilt in small batches while the same Claude container persists.
+const CLAUDE_MESSAGE_TIMEOUT_MS = 4 * 60 * 1_000;
+const SLIDES_PER_CLAUDE_REQUEST = 2;
+const CLAUDE_NETWORK_RETRY_COUNT = 2;
 const STATUS_HEARTBEAT_INTERVAL_MS = 60 * 1_000;
 
 export async function runPptxWorker(request: Request): Promise<Response> {
@@ -79,9 +83,16 @@ export async function runPptxWorker(request: Request): Promise<Response> {
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Native PPTX worker failed.';
     console.error(JSON.stringify({ event: 'pptx.worker.failed', jobId: jobId ?? null, error: message }));
-    if (supabase && jobId) {
-      if (executionId) {
+    if (supabase && jobId && executionId) {
+      try {
         await updateStatus(supabase, jobId, 'failed', message, 0, 'PPTX generation failed', executionId);
+      } catch (statusError) {
+        console.error(JSON.stringify({
+          event: 'pptx.worker.failure_status_update_failed',
+          jobId,
+          executionId,
+          error: statusError instanceof Error ? statusError.message : 'Unable to persist the failure status.',
+        }));
       }
     }
     throw error;
@@ -116,10 +127,10 @@ async function generateNativePptx(
       : null;
     if (logoUpload) uploadedFileIds.push(logoUpload.id);
 
-    await updateStatus(supabase, jobId, 'processing', null, 35, 'Claude is rebuilding editable slides', executionId);
+    await updateStatus(supabase, jobId, 'processing', null, 35, 'Claude is rebuilding editable slides in small batches', executionId);
     logEvent('pptx.worker.claude_rebuild_started', { jobId, executionId });
     const heartbeat = setInterval(() => {
-      void updateStatus(supabase, jobId, 'processing', null, 35, 'Claude is rebuilding editable slides', executionId)
+      void updateStatus(supabase, jobId, 'processing', null, 35, 'Claude is rebuilding editable slides in small batches', executionId)
         .then(() => logEvent('pptx.worker.claude_rebuild_heartbeat', { jobId, executionId }))
         .catch((error: unknown) => {
           console.error(JSON.stringify({
@@ -133,7 +144,18 @@ async function generateNativePptx(
 
     let response: Record<string, unknown>;
     try {
-      response = await createNativePresentation(apiKey, deckPlan, uploads, logoUpload);
+      response = await createNativePresentation(apiKey, deckPlan, uploads, logoUpload, async (completedBatches, totalBatches) => {
+        const progress = 35 + Math.round((completedBatches / totalBatches) * 40);
+        await updateStatus(
+          supabase,
+          jobId,
+          'processing',
+          null,
+          progress,
+          `Claude rebuilt batch ${completedBatches} of ${totalBatches}`,
+          executionId,
+        );
+      });
     } finally {
       clearInterval(heartbeat);
     }
@@ -157,7 +179,16 @@ async function generateNativePptx(
       .eq('id', jobId);
     if (updateError) throw updateError;
   } finally {
-    await Promise.all(uploadedFileIds.map((fileId) => deleteClaudeFile(apiKey, fileId)));
+    const cleanup = await Promise.allSettled(uploadedFileIds.map((fileId) => deleteClaudeFile(apiKey, fileId)));
+    cleanup.forEach((result) => {
+      if (result.status === 'rejected') {
+        console.warn(JSON.stringify({
+          event: 'pptx.worker.claude_file_cleanup_failed',
+          jobId,
+          error: result.reason instanceof Error ? result.reason.message : 'Unable to delete a Claude source file.',
+        }));
+      }
+    });
   }
 }
 
@@ -166,68 +197,71 @@ async function createNativePresentation(
   deckPlan: DeckPlan,
   uploads: Array<{ pageNumber: number; fileId: string; fileName: string }>,
   logoUpload: { id: string; filename: string } | null,
+  onBatchComplete: (completedBatches: number, totalBatches: number) => Promise<void>,
 ): Promise<Record<string, unknown>> {
   const model = process.env.CLAUDE_MODEL || 'claude-sonnet-5';
-  const content = [
-    {
-      type: 'text',
-      text: JSON.stringify({
-        task: 'Create the final native editable PowerPoint presentation.',
-        requiredOutput: 'Save one finished .pptx file in the code execution container output so it can be downloaded.',
-        deckPlan,
-        sourceImages: uploads,
-        logoAsset: logoUpload ? { fileId: logoUpload.id, fileName: logoUpload.filename, position: 'top-right' } : null,
-        nonNegotiableRules: [
-          'Use the pptx skill and code execution to create a real PowerPoint file, not a deck made of full-slide screenshots.',
-          'Inspect each source image and use the approved deckPlan copy exactly.',
-          'Recreate approved titles, subtitles, labels, takeaways, and logo placeholder as native editable text using Pretendard or a compatible sans-serif fallback.',
-          'Use the source image to match text position, hierarchy, color treatment, and blank surfaces. Keep only complex illustrations as raster assets.',
-          'Respect each visualStructure so comparison, process, roadmap, hub, dashboard, and closing slides remain distinct.',
-          'Keep text readable, unclipped, non-overlapping, and in the requested language.',
-          'Place the provided logo at top-right, or leave an editable Logo placeholder when there is no logo.',
-          'Add one final editable manual template slide matching the deck style.',
-        ],
-      }),
-    },
-    ...uploads.flatMap((upload) => [
-      { type: 'image', source: { type: 'file', file_id: upload.fileId } },
-      { type: 'container_upload', file_id: upload.fileId },
-    ]),
-    ...(logoUpload ? [
-      { type: 'image', source: { type: 'file', file_id: logoUpload.id } },
-      { type: 'container_upload', file_id: logoUpload.id },
-    ] : []),
-  ];
+  const batches = chunk(uploads, SLIDES_PER_CLAUDE_REQUEST);
+  let containerId: string | null = null;
+  let payload: Record<string, unknown> | null = null;
 
-  let payload = await sendClaudeMessage(apiKey, {
-    model,
-    max_tokens: 16000,
-    container: { skills: [{ type: 'anthropic', skill_id: 'pptx', version: 'latest' }] },
-    tools: [{ type: 'code_execution_20260521', name: 'code_execution' }],
-    messages: [{ role: 'user', content }],
-  });
+  for (const [batchIndex, batch] of batches.entries()) {
+    const isFirstBatch = batchIndex === 0;
+    const isFinalBatch = batchIndex === batches.length - 1;
+    const batchSlides = batch.map((upload) => {
+      const slide = deckPlan.slides.find((candidate) => candidate.pageNumber === upload.pageNumber);
+      if (!slide) throw new Error(`Approved copy is missing for slide ${upload.pageNumber}.`);
+      return { ...slide, sourceImage: upload };
+    });
+    const content = [
+      {
+        type: 'text',
+        text: JSON.stringify({
+          task: isFirstBatch
+            ? 'Create the first batch of a final native editable PowerPoint presentation.'
+            : 'Continue the existing PowerPoint file in the container and add the next slide batch.',
+          batch: `${batchIndex + 1} of ${batches.length}`,
+          outputFile: 'qlearn-editable-deck.pptx',
+          presentation: { title: deckPlan.title, request: deckPlan.request },
+          slidesToBuild: batchSlides,
+          logoAsset: isFirstBatch && logoUpload
+            ? { fileId: logoUpload.id, fileName: logoUpload.filename, position: 'top-right' }
+            : null,
+          finalBatch: isFinalBatch,
+          nonNegotiableRules: [
+            'Use the pptx skill and code execution to create or update qlearn-editable-deck.pptx as a real PowerPoint file, never as full-slide screenshots.',
+            'Inspect each supplied source image and reproduce the approved slide copy as native editable text using Pretendard or a compatible sans-serif fallback.',
+            'Match text position, hierarchy, color treatment, and blank surfaces from each source image. Keep only complex illustrations as raster assets.',
+            'Respect each visualStructure so slide compositions remain distinct. Keep text readable, unclipped, non-overlapping, and in the requested language.',
+            'Place the provided logo at top-right, or leave an editable Logo placeholder when no logo is supplied.',
+            ...(isFinalBatch ? ['Add one final editable manual template slide matching the deck style, then attach qlearn-editable-deck.pptx as a code execution output file.'] : ['Save qlearn-editable-deck.pptx before responding so the next batch can continue it.']),
+          ],
+        }),
+      },
+      ...batch.flatMap((upload) => [
+        { type: 'image', source: { type: 'file', file_id: upload.fileId } },
+        { type: 'container_upload', file_id: upload.fileId },
+      ]),
+      ...(isFirstBatch && logoUpload ? [
+        { type: 'image', source: { type: 'file', file_id: logoUpload.id } },
+        { type: 'container_upload', file_id: logoUpload.id },
+      ] : []),
+    ];
 
-  for (let resumeCount = 0; payload.stop_reason === 'pause_turn' && resumeCount < 4; resumeCount += 1) {
-    const containerId = getContainerId(payload);
-    const assistantContent = payload.content;
-    if (!containerId || !Array.isArray(assistantContent)) {
-      throw new Error('Claude paused PPTX generation without a reusable container response.');
-    }
-    payload = await sendClaudeMessage(apiKey, {
+    payload = await completeClaudeBatch(apiKey, {
       model,
       max_tokens: 16000,
-      container: { id: containerId },
+      container: containerId
+        ? { id: containerId }
+        : { skills: [{ type: 'anthropic', skill_id: 'pptx', version: 'latest' }] },
       tools: [{ type: 'code_execution_20260521', name: 'code_execution' }],
-      messages: [
-        { role: 'user', content },
-        { role: 'assistant', content: assistantContent },
-        { role: 'user', content: 'Continue the same PPTX task. Finish and save the editable .pptx file to the container output.' },
-      ],
-    });
+      messages: [{ role: 'user', content }],
+    }, batchIndex + 1, batches.length);
+    containerId = getContainerId(payload);
+    if (!containerId) throw new Error(`Claude did not preserve a reusable container after PPTX batch ${batchIndex + 1}.`);
+    await onBatchComplete(batchIndex + 1, batches.length);
   }
-  if (payload.stop_reason === 'pause_turn') {
-    throw new Error('Claude PPTX generation exceeded the continuation limit. Retry the PPTX generation.');
-  }
+
+  if (!payload) throw new Error('Claude did not produce a PPTX generation response.');
   return payload;
 }
 
@@ -248,24 +282,72 @@ async function uploadSourceFile(apiKey: string, source: string | undefined, defa
   return { id: payload.id, filename: payload.filename ?? fileName };
 }
 
-async function sendClaudeMessage(apiKey: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
-  let response: Response;
-  try {
-    response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: { ...anthropicHeaders(apiKey), 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(CLAUDE_MESSAGE_TIMEOUT_MS),
-    });
-  } catch (error) {
-    if (error instanceof DOMException && error.name === 'TimeoutError') {
-      throw new Error('Claude PPTX generation did not respond within 12 minutes. Retry the PPTX job.');
+async function completeClaudeBatch(
+  apiKey: string,
+  body: Record<string, unknown>,
+  batchNumber: number,
+  totalBatches: number,
+): Promise<Record<string, unknown>> {
+  let payload = await sendClaudeMessage(apiKey, body, batchNumber, totalBatches);
+
+  for (let resumeCount = 0; payload.stop_reason === 'pause_turn' && resumeCount < 3; resumeCount += 1) {
+    const containerId = getContainerId(payload);
+    const assistantContent = payload.content;
+    if (!containerId || !Array.isArray(assistantContent)) {
+      throw new Error(`Claude paused PPTX batch ${batchNumber} without a reusable container response.`);
     }
-    throw error;
+    payload = await sendClaudeMessage(apiKey, {
+      ...body,
+      container: { id: containerId },
+      messages: [
+        ...(Array.isArray(body.messages) ? body.messages : []),
+        { role: 'assistant', content: assistantContent },
+        { role: 'user', content: `Continue PPTX batch ${batchNumber} of ${totalBatches}. Save the partial deck before responding.` },
+      ],
+    }, batchNumber, totalBatches);
   }
-  const payload = await response.json() as Record<string, unknown> & { error?: { message?: string } };
-  if (!response.ok) throw new Error(payload.error?.message ?? 'Claude pptx skill request failed.');
+  if (payload.stop_reason === 'pause_turn') {
+    throw new Error(`Claude PPTX batch ${batchNumber} exceeded the continuation limit. Retry the PPTX job.`);
+  }
   return payload;
+}
+
+async function sendClaudeMessage(
+  apiKey: string,
+  body: Record<string, unknown>,
+  batchNumber: number,
+  totalBatches: number,
+): Promise<Record<string, unknown>> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= CLAUDE_NETWORK_RETRY_COUNT; attempt += 1) {
+    try {
+      const response = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { ...anthropicHeaders(apiKey), 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(CLAUDE_MESSAGE_TIMEOUT_MS),
+      });
+      const payload = await response.json() as Record<string, unknown> & { error?: { message?: string } };
+      if (!response.ok) throw new Error(payload.error?.message ?? 'Claude pptx skill request failed.');
+      return payload;
+    } catch (error) {
+      lastError = error;
+      const isLastAttempt = attempt === CLAUDE_NETWORK_RETRY_COUNT;
+      if (isLastAttempt) break;
+      console.warn(JSON.stringify({
+        event: 'pptx.worker.claude_batch_retry',
+        batchNumber,
+        totalBatches,
+        attempt,
+        error: describeClaudeRequestError(error),
+      }));
+      await delay(attempt * 2_000);
+    }
+  }
+
+  throw new Error(
+    `Claude PPTX batch ${batchNumber} of ${totalBatches} could not be completed: ${describeClaudeRequestError(lastError)}`,
+  );
 }
 
 async function findGeneratedPptxFile(apiKey: string, response: Record<string, unknown>): Promise<string> {
@@ -373,6 +455,28 @@ function getContainerId(response: Record<string, unknown>): string | null {
 function createFileName(title: string): string {
   const cleaned = title.replace(/[\\/:*?"<>|]+/g, '-').replace(/\s+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
   return `${cleaned || 'qlearn-editable-deck'}.pptx`;
+}
+
+function chunk<T>(items: T[], size: number): T[][] {
+  const groups: T[][] = [];
+  for (let index = 0; index < items.length; index += size) {
+    groups.push(items.slice(index, index + size));
+  }
+  return groups;
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function describeClaudeRequestError(error: unknown): string {
+  if (error instanceof DOMException && error.name === 'TimeoutError') {
+    return 'Claude did not respond within four minutes for this small slide batch.';
+  }
+  if (error instanceof Error && error.message === 'fetch failed') {
+    return 'The network connection to Claude was interrupted.';
+  }
+  return error instanceof Error ? error.message : 'Unknown Claude request error.';
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

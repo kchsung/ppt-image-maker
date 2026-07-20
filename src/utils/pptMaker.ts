@@ -170,7 +170,7 @@ const FORBIDDEN_COPY_PATTERNS = [
   /…/u,
   /\[[^\]]*(?:page|페이지)[^\]]*\]/iu,
   /\bDesigned for\b/iu,
-  /\bMoves From\b/iu,
+  /\bMoves From Insight To\b/iu,
   /\bSlide Title\b/iu,
   /\bKey Point\b/iu,
   /\bLorem ipsum\b/iu,

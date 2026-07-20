@@ -8,6 +8,7 @@ import type {
   PptMakerRequest,
   SlidePlan,
 } from '@/types/models/pptMaker.model';
+import { createMockDeckPlan, createMockSlideImageDataUrl } from '@/mocks/pptMaker.mock';
 import {
   createSlideTitle,
   extractKeywords,
@@ -179,6 +180,21 @@ function wait(durationMs: number): Promise<void> {
 }
 
 function createLocalDemoDeckPlan(request: PptMakerRequest): PptDeckPlan {
+  const plan = createMockDeckPlan(request, {
+    id: `deck-${Date.now()}`,
+    createdAt: new Date().toISOString(),
+  });
+
+  return {
+    ...plan,
+    slides: plan.slides.map((slide) => ({
+      ...slide,
+      imagePrompt: createImagePrompt(request, slide),
+    })),
+  };
+}
+
+function createLegacyLocalDemoDeckPlan(request: PptMakerRequest): PptDeckPlan {
     const seeds = splitIntoSlideSeeds(request.sourceText, request.slideCount);
     const totalSlides = seeds.length;
 
@@ -235,13 +251,12 @@ function createMockImageDeck(deckPlan: PptDeckPlan): GeneratedImageDeck {
     deckPlanId: deckPlan.id,
     createdAt: new Date().toISOString(),
     images: deckPlan.slides.map((slide): GeneratedSlideImage => {
-      const svg = createMockSlideSvg(slide);
       return {
         id: `image-${slide.id}`,
         slideId: slide.id,
         pageNumber: slide.pageNumber,
         title: slide.title,
-        imageDataUrl: `data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(svg)))}`,
+        imageDataUrl: createMockSlideImageDataUrl(slide),
         prompt: slide.imagePrompt,
         provider: 'mock',
       };

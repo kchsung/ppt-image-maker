@@ -1,5 +1,6 @@
 import type { PptAdminService } from '@/interfaces/pptAdmin.interface';
 import { supabase } from '@/lib/supabase';
+import { createMockDeckPlan, createMockSlideImageDataUrl, samplePptMakerRequest } from '@/mocks/pptMaker.mock';
 import type { AdminGenerationSummary, SavedPptxOutput } from '@/types/models/pptAdmin.model';
 import { getSupabaseFunctionErrorMessage } from '@/utils/supabaseFunctionError';
 
@@ -104,56 +105,36 @@ async function blobToBase64(blob: Blob): Promise<string> {
 
 function createMockSummary(): AdminGenerationSummary {
   const now = new Date().toISOString();
+  const deckPlan = createMockDeckPlan({ ...samplePptMakerRequest, slideCount: 4 }, {
+    id: 'mock-deck-plan-1',
+    createdAt: now,
+  });
+
   return {
     jobs: [
       {
         id: 'mock-job-1',
-        title: 'AI Lecture Deck',
+        title: deckPlan.title,
         status: 'succeeded',
         progress: 100,
-        totalItems: 3,
-        completedItems: 3,
+        totalItems: deckPlan.slides.length,
+        completedItems: deckPlan.slides.length,
         createdAt: now,
         updatedAt: now,
         errorMessage: null,
-        deckPlan: {
-          id: 'mock-deck-plan-1',
-          title: 'AI Lecture Deck',
-          createdAt: now,
-          request: {
-            sourceText: 'Mock source text',
-            targetLanguage: 'English',
-            audience: 'Executives',
-            purpose: 'Lecture',
-            slideCount: 3,
-            styleReference: {
-              id: 'mock-style',
-              name: 'Mock style',
-              notes: 'Mock style notes',
-              primaryColorLabel: 'Navy',
-              accentColorLabel: 'Orange',
-            },
-          },
-          slides: [],
-          copyQa: {
-            status: 'passed',
-            checks: ['Mock copy plan passed quality validation.'],
-            issues: [],
-          },
-        },
+        deckPlan,
         resultPath: null,
         pptxUrl: null,
-        items: [
-          {
-            id: 'mock-item-1',
-            pageNumber: 1,
-            status: 'succeeded',
-            outputPath: 'ppt-generations/mock-job-1/slide-01.png',
-            imageUrl: null,
-            errorMessage: null,
-            updatedAt: now,
-          },
-        ],
+        pptxStatus: 'not-started',
+        items: deckPlan.slides.map((slide) => ({
+          id: `mock-item-${slide.pageNumber}`,
+          pageNumber: slide.pageNumber,
+          status: 'succeeded' as const,
+          outputPath: `ppt-generations/mock-job-1/slides/slide-${String(slide.pageNumber).padStart(2, '0')}.png`,
+          imageUrl: createMockSlideImageDataUrl(slide),
+          errorMessage: null,
+          updatedAt: now,
+        })),
       },
     ],
   };

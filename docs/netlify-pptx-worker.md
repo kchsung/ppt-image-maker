@@ -7,7 +7,7 @@ Creating an editable PPTX requires Claude Files API uploads, a Claude Messages r
 The application now uses a two-part flow:
 
 1. The Supabase `generate-claude-pptx` function validates the request, marks the job as queued, and dispatches it to Netlify.
-2. The Netlify Background Function creates the PPTX, uploads it to Supabase Storage, and updates `generation_jobs.request.pptxGeneration` with progress and the terminal state.
+2. The Netlify Background Function creates the PPTX, uploads it to Supabase Storage, and updates `generation_jobs.request.pptxGeneration` with progress and the terminal state. It rebuilds slides in two-slide batches inside one retained Claude container so a long API connection does not hold up an entire deck.
 
 Netlify Background Functions can run for up to 15 minutes. This must be a Background Function, not a Netlify Edge Function.
 
@@ -56,9 +56,9 @@ The `PPT_WORKER_SECRET` protects the worker endpoint from unauthenticated caller
 
 1. Generate a deck in PPT Maker until all slide images are complete.
 2. Select **Generate PPTX** from the List page.
-3. The project should show `PPTX Generating`, a phase label, and progress that refreshes automatically.
+3. The project should show `PPTX Generating`, a phase label such as `Claude rebuilt batch 2 of 5`, and progress that refreshes automatically.
 4. At completion it changes to `PPTX Ready`, then **Preview PPTX** and **Download PPTX** become available.
-5. For failures, inspect the Netlify function log for `pptx.*` events and the project card's error message.
+5. For failures, inspect the Netlify function log for `pptx.*` events and the project card's error message. Batch-level failures identify the affected batch and whether the request timed out or the network connection was interrupted.
 
 ## Operational notes
 

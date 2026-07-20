@@ -16,7 +16,7 @@ describe('PptAdminPage', () => {
     );
 
     expect(screen.getByRole('heading', { name: 'PPT List' })).toBeInTheDocument();
-    expect(await screen.findByText('AI Lecture Deck')).toBeInTheDocument();
+    expect(await screen.findByText('AI-Ready Judgment And Execution')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /refresh/i })).toBeInTheDocument();
   });
 });
