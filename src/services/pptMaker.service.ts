@@ -193,7 +193,7 @@ async function generateSectionPlan(request: PptMakerRequest, sectionTitle: strin
     createdAt: data.createdAt || new Date().toISOString(),
     request,
   } satisfies PptDeckPlan;
-  const issues = getDeckCopyQaIssues(plan);
+  const issues = getDeckCopyQaIssues(plan, 'section');
   if (issues.length > 0 || plan.copyQa.status !== 'passed') {
     throw new Error(issues[0] ?? plan.copyQa.issues[0] ?? `Slide copy did not pass quality validation for section "${sectionTitle}".`);
   }

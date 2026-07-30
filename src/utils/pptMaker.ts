@@ -178,7 +178,12 @@ const FORBIDDEN_COPY_PATTERNS = [
 
 const HANGUL_CHARACTER_PATTERN = /[\u3131-\u318e\uac00-\ud7a3]/u;
 
-export function getDeckCopyQaIssues(deckPlan: Pick<PptDeckPlan, 'request' | 'slides'>): string[] {
+type CopyQaScope = 'deck' | 'section';
+
+export function getDeckCopyQaIssues(
+  deckPlan: Pick<PptDeckPlan, 'request' | 'slides'>,
+  scope: CopyQaScope = 'deck',
+): string[] {
   const issues: string[] = [];
 
   deckPlan.slides.forEach((slide) => {
@@ -228,16 +233,18 @@ export function getDeckCopyQaIssues(deckPlan: Pick<PptDeckPlan, 'request' | 'sli
     }
   });
 
-  const structures = deckPlan.slides.map((slide) => slide.visualStructure);
-  const requiredDistinctStructures = Math.min(deckPlan.slides.length, 4);
-  if (new Set(structures).size < requiredDistinctStructures) {
-    issues.push(`Deck needs at least ${requiredDistinctStructures} distinct visual structures.`);
-  }
-  structures.forEach((structure, index) => {
-    if (index > 0 && structure === structures[index - 1]) {
-      issues.push(`Slides ${index} and ${index + 1} repeat the same visual structure.`);
+  if (scope === 'deck') {
+    const structures = deckPlan.slides.map((slide) => slide.visualStructure);
+    const requiredDistinctStructures = Math.min(deckPlan.slides.length, 4);
+    if (new Set(structures).size < requiredDistinctStructures) {
+      issues.push(`Deck needs at least ${requiredDistinctStructures} distinct visual structures.`);
     }
-  });
+    structures.forEach((structure, index) => {
+      if (index > 0 && structure === structures[index - 1]) {
+        issues.push(`Slides ${index} and ${index + 1} repeat the same visual structure.`);
+      }
+    });
+  }
 
   return Array.from(new Set(issues));
 }

@@ -11,8 +11,8 @@ const requestBody = {
   },
 };
 
-function response(slides: unknown[]) {
-  return new Response(JSON.stringify({ output_text: JSON.stringify({ strategy: validStrategy(), slides }) }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+function response(slides: unknown[], strategy = validStrategy()) {
+  return new Response(JSON.stringify({ output_text: JSON.stringify({ strategy, slides }) }), { status: 200, headers: { 'Content-Type': 'application/json' } });
 }
 
 function validStrategy() {
@@ -233,6 +233,39 @@ describe('generate-ppt-slide-plan Edge Function', () => {
     expect(prompt.requestedSlideCount).toBe(5);
     expect(prompt.totalDeckSlideCount).toBe(50);
     expect(prompt.activeSection).toMatchObject({ id: 'model', slideStart: 11 });
+  });
+
+  it('uses the Blueprint deck strategy when validating an isolated section', async () => {
+    const batchRequest = {
+      request: {
+        ...requestBody.request,
+        slideCount: 20,
+        deckBlueprint: {
+          title: 'Long-form executive deck',
+          strategy: validStrategy(),
+          sections: [
+            { id: 'conclusion', title: 'Conclusion', purpose: 'Confirm the commitment.', keyMessage: 'Approve the next investment decision.', slideStart: 11, slideCount: 2, visualFocus: ['closing-commitment'] },
+          ],
+        },
+        planningBatch: { sectionId: 'conclusion', startPage: 11, slideCount: 2, totalSlides: 20 },
+      },
+    };
+    const localOnlyStrategy = {
+      coreThesis: 'Approve the next investment decision.',
+      audienceNeed: 'Leaders need an accountable close.',
+      desiredOutcome: 'Approve the investment.',
+      narrativeArc: [{ phase: 'Action', purpose: 'Confirm the decision.', slideNumbers: [11, 12] }],
+    };
+    fetchMock.mockResolvedValue(response([
+      validSlide({ pageNumber: 1, title: 'Confirm The Investment' }),
+      validSlide({ pageNumber: 2, title: 'Approve The Next Step', visualStructure: 'closing-commitment', archetype: 'closing' }),
+    ], localOnlyStrategy));
+
+    const result = await handler!(new Request('http://localhost', { method: 'POST', body: JSON.stringify(batchRequest) }));
+    const body = await result.json();
+
+    expect(result.status).toBe(200);
+    expect(body.strategy).toEqual(validStrategy());
   });
 
   it('allows standard uppercase abbreviations in Korean slide copy', async () => {

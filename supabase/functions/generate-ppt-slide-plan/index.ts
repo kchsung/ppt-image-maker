@@ -145,7 +145,7 @@ Deno.serve(async (req) => {
       id: request.planningBatch?.sectionId ? `section-${request.planningBatch.sectionId}-${Date.now()}` : `deck-${Date.now()}`,
       title: plan.slides[0]?.title ?? 'Untitled Deck',
       createdAt: new Date().toISOString(),
-      strategy: plan.strategy,
+      strategy: request.deckBlueprint?.strategy ?? plan.strategy,
       slides: plan.slides.map((slide) => ({
         id: `slide-${slide.pageNumber}`,
         ...slide,
@@ -454,8 +454,9 @@ function validatePlan(plan: DraftPlan, request: PptMakerRequest): string[] {
   const batchStartPage = getBatchStartPage(request);
   const totalSlides = getTotalSlideCount(request);
   if (slides.length !== batchSlideCount) issues.push(`Expected ${batchSlideCount} slides but received ${slides.length}.`);
-  if (!plan.strategy.coreThesis || !plan.strategy.audienceNeed || !plan.strategy.desiredOutcome) issues.push('The deck strategy is missing a thesis, audience need, or desired outcome.');
-  if (plan.strategy.narrativeArc.length < 3) issues.push('The deck strategy needs a beginning, evidence-building middle, and action-oriented close.');
+  const strategy = request.deckBlueprint?.strategy ?? plan.strategy;
+  if (!strategy.coreThesis || !strategy.audienceNeed || !strategy.desiredOutcome) issues.push('The deck strategy is missing a thesis, audience need, or desired outcome.');
+  if (!request.planningBatch && strategy.narrativeArc.length < 3) issues.push('The deck strategy needs a beginning, evidence-building middle, and action-oriented close.');
   const distinct = new Set(slides.map((slide) => slide.visualStructure));
   if (batchSlideCount >= 4 && distinct.size < Math.min(4, batchSlideCount)) issues.push('The plan needs at least four distinct visual structures.');
   slides.forEach((slide, index) => {
