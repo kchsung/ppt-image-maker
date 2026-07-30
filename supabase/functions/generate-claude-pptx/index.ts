@@ -67,8 +67,11 @@ Deno.serve(async (req) => {
       body: JSON.stringify({ ...body, executionId }),
       signal: AbortSignal.timeout(10_000),
     });
-    if (!workerResponse.ok) {
-      const message = `Netlify PPTX worker could not accept the job (${workerResponse.status}).`;
+    const contentType = workerResponse.headers.get('content-type') ?? '';
+    if (!workerResponse.ok || contentType.includes('text/html')) {
+      const message = contentType.includes('text/html')
+        ? 'Netlify PPTX worker returned an HTML page instead of accepting the job. Verify NETLIFY_PPT_WORKER_URL ends with /pptx-worker.'
+        : `Netlify PPTX worker could not accept the job (${workerResponse.status}).`;
       await updatePptxGenerationStatus(supabase, jobId, {
         status: 'failed',
         errorMessage: message,
@@ -79,6 +82,8 @@ Deno.serve(async (req) => {
       });
       return json({ error: message }, 502);
     }
+    // Netlify Background Functions acknowledge accepted work with an empty 202 response.
+    // Do not parse a body here; the worker posts progress to Supabase separately.
     logPptxEvent('pptx.worker_dispatch_accepted', { jobId, executionId, status: workerResponse.status });
 
     return json({
