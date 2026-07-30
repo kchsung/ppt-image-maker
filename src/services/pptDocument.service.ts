@@ -23,12 +23,12 @@ export async function enhancePptDocument(
 
     if (error || !data) {
       throw new Error(
-        `Claude native PPTX generation failed: ${error ? await getSupabaseFunctionErrorMessage(error) : 'No PPTX result returned.'}`,
+        `Native PptxGenJS PPTX generation failed: ${error ? await getSupabaseFunctionErrorMessage(error) : 'No PPTX result returned.'}`,
       );
     }
 
     if (!data.pptxUrl && data.pptxStatus !== 'processing') {
-      throw new Error('Claude native PPTX generation completed without an exported PPTX file.');
+      throw new Error('Native PptxGenJS PPTX generation completed without an exported PPTX file.');
     }
 
     return data;
@@ -56,7 +56,7 @@ export async function enhancePptDocument(
     qaChecklist: [
       'Slide copy was approved before image generation.',
       'Visible editable copy is matched to a verified image layout slot.',
-      'Local preview uses source images because Claude native PPTX generation requires Supabase.',
+      'Local preview uses generated visual assets because native PptxGenJS PPTX generation requires Supabase.',
       'Main messages remain in speaker notes when there is no dedicated visual slot.',
     ],
     layouts,

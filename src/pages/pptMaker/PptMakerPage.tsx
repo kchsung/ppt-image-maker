@@ -62,7 +62,7 @@ export function PptMakerPage() {
 
   const handleExportPptx = () => {
     if (!imageDeck || !documentEnhancement) {
-      toast.error('Wait for Claude to finish the final editable PPTX.');
+      toast.error('Wait for PptxGenJS to finish the final editable PPTX.');
       return;
     }
 
@@ -107,7 +107,7 @@ export function PptMakerPage() {
       <PageHeader
         eyebrow="QLEARN Startup"
         title="PPT Image Deck Maker"
-        description="Choose a numbered template or upload a sample slide style, then paste source text. QLEARN will generate slide images and prepare a PPTX output."
+        description="Choose a numbered template or upload a sample slide style, then paste source text. QLEARN will draft editable slides, generate visual assets, and assemble a PPTX output."
         actions={
           <Button
             variant="secondary"

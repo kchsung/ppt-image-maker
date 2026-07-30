@@ -23,36 +23,21 @@ import {
 import { getSupabaseFunctionErrorMessage } from '@/utils/supabaseFunctionError';
 
 function createImagePrompt(request: PptMakerRequest, slide: Omit<SlidePlan, 'imagePrompt'>): string {
-  const requiredCopy = [
-    `Title: "${slide.title}"`,
-    `Subtitle: "${slide.subtitle}"`,
-    ...slide.labels.map((label, index) => `Label ${index + 1}: "${label}"`),
-    `Takeaway: "${slide.takeaway}"`,
-  ].join('\n');
-
   return [
-    `Create slide ${slide.pageNumber} as a complete 16:9 presentation reference image.`,
+    `Create one text-free visual asset for presentation slide ${slide.pageNumber}.`,
     `Style: ${request.styleReference.notes}`,
     `Use ${request.styleReference.primaryColorLabel} as the primary color and ${request.styleReference.accentColorLabel} for emphasis.`,
-    'Typography: use a clean Pretendard-style Korean/English sans-serif look.',
-    `Audience: ${request.audience}`,
-    `Purpose: ${request.purpose}`,
-    `Language: ${request.targetLanguage}`,
     `Story role: ${slide.archetype}.`,
     `Required visual structure: ${slide.visualStructure}.`,
     `Composition instruction: ${getVisualStructureDescription(slide.visualStructure)}`,
-    'Follow this composition exactly. Do not replace it with a generic repeated puzzle-card or left-to-right process layout.',
-    `Concepts to represent visually without text: ${slide.labels.join(', ')}`,
-    'Render the required copy exactly as written below. Preserve the requested language, spelling, capitalization, and punctuation.',
-    'The exact rendered copy is a visual reference for Claude to rebuild native editable PowerPoint text at the same positions.',
-    requiredCopy,
-    'Do not add any other readable text, placeholder dots, lorem ipsum, page labels, invented captions, or extra footer text.',
-    'Do not invent or render a brand logo. Reserve a clean logo area in the top-right corner without any text.',
-    request.logoImageDataUrl
-      ? 'The uploaded logo will be inserted later in PowerPoint at the top-right, so keep that corner clean in the generated image.'
-      : 'No logo was uploaded. Keep the top-right logo area clean and empty; PowerPoint will add its editable logo placeholder there.',
-    'Use the required visual structure to create a distinct composition for this slide. The template supplies style only, not a layout to repeat verbatim.',
-    'Keep every required text region on a flat, high-contrast surface so it can be cleanly recreated as native PowerPoint text.',
+    `Image slot purpose: ${slide.imageSlot.purpose}.`,
+    `Place the asset for a ${slide.imageSlot.placement} slot only.`,
+    slide.imageSlot.prompt,
+    `Concepts to represent visually: ${slide.labels.join(', ')}.`,
+    `Slide concept: ${slide.mainMessage}`,
+    'Return only the illustration, photo treatment, icon system, or diagram asset. Do not make a full 16:9 slide.',
+    'Do not render readable text, letters, numbers, labels, titles, subtitles, logos, page numbers, footers, cards, arrows, frames, or placeholders.',
+    'The PptxGenJS renderer will create every text box, metric, card, connector, and logo position as editable native PowerPoint objects.',
   ].join('\n');
 }
 
@@ -225,6 +210,12 @@ function createLegacyLocalDemoDeckPlan(request: PptMakerRequest): PptDeckPlan {
         subtitle: validateSlideText(subtitle, request.targetLanguage),
         labels,
         takeaway: validateSlideText(takeaway, request.targetLanguage),
+        imageSlot: {
+          id: `visual-${pageNumber}`,
+          purpose: 'A supporting editorial illustration for the editable slide layout.',
+          placement: 'right-hero',
+          prompt: `Text-free editorial illustration representing ${labels.join(', ')}.`,
+        },
       };
 
       return {

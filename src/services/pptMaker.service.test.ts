@@ -17,12 +17,11 @@ describe('pptMakerService', () => {
       'card-grid',
       'closing-commitment',
     ]);
-    expect(deck.slides[0].imagePrompt).toContain('Create slide 1');
+    expect(deck.slides[0].imagePrompt).toContain('Create one text-free visual asset for presentation slide 1');
     expect(deck.slides[0].imagePrompt).toContain('Required visual structure: hero-visual');
-    expect(deck.slides[0].imagePrompt).toContain('Render the required copy exactly as written below');
-    expect(deck.slides[0].imagePrompt).toContain('Label 1:');
-    expect(deck.slides[0].imagePrompt).not.toContain('must not contain readable words');
-    expect(deck.slides[0].imagePrompt).toContain(samplePptMakerRequest.audience);
+    expect(deck.slides[0].imagePrompt).toContain('text-free visual asset');
+    expect(deck.slides[0].imagePrompt).toContain('Do not render readable text');
+    expect(deck.slides[0].imageSlot.prompt).toContain('Text-free');
   });
 
   it('generates mock slide images when Supabase is not configured', async () => {
@@ -42,6 +41,6 @@ describe('pptMakerService', () => {
 
     expect(deck.copyQa.status).toBe('passed');
     expect(getDeckCopyQaIssues(deck)).toEqual([]);
-    expect(deck.slides[0].title).toBe('AI 시대의 판단 역량');
+    expect(deck.slides[0].title).toBe('AI 판단과 실행');
   });
 });

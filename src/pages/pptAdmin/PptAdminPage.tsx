@@ -214,12 +214,12 @@ export function PptAdminPage() {
       const imageDeck = createImageDeckFromJob(job);
       const enhancement = await enhancePptDocument(job.deckPlan, imageDeck);
       if (enhancement.pptxStatus === 'processing') {
-        toast.success('PPTX generation started. The file will appear here when Claude finishes.');
+        toast.success('PPTX generation started. The file will appear here when PptxGenJS finishes.');
         await loadJobs();
         return;
       }
       if (enhancement.pptxUrl) {
-        toast.success('Claude native editable PPTX was saved to Supabase Storage.');
+        toast.success('Native editable PptxGenJS PPTX was saved to Supabase Storage.');
         await loadJobs();
         return;
       }

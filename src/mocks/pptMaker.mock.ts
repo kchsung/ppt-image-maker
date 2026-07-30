@@ -202,11 +202,24 @@ const koreanSlideCopies: MockSlideCopy[] = [
   },
 ];
 
+const readableKoreanSlideCopies: MockSlideCopy[] = [
+  { title: 'AI 판단과 실행', subtitle: '속도와 책임을 함께 설계합니다.', mainMessage: 'AI는 초안을 빠르게 만들고, 사람은 맥락과 근거를 검증해 최종 결정을 내립니다.', labels: ['목표 설정', 'AI 초안', '사람 검증'], takeaway: '속도는 AI로 높이고 책임은 사람이 지킵니다.' },
+  { title: '좋은 질문이 만드는 차이', subtitle: '문제 정의가 결과의 품질을 좌우합니다.', mainMessage: '명확한 질문은 필요한 근거와 검토 기준을 드러내어 더 나은 결과를 만듭니다.', labels: ['문제 정의', '근거 확인', '결정 기준'], takeaway: '좋은 질문은 좋은 판단의 출발점입니다.' },
+  { title: '신뢰 가능한 업무 흐름', subtitle: '초안부터 검증까지 역할을 연결합니다.', mainMessage: '반복 가능한 흐름은 사람과 AI의 역할을 분명하게 나누고 검토 시점을 고정합니다.', labels: ['초안 생성', '사실 검토', '결과 승인'], takeaway: '검증 단계가 있어야 결과가 업무 자산이 됩니다.' },
+  { title: '사람과 AI의 역할', subtitle: '능력과 책임을 구분합니다.', mainMessage: 'AI는 탐색과 요약을 맡고 사람은 맥락 설정, 주장 검증, 결과 승인을 책임집니다.', labels: ['AI 탐색', '사람 판단', '팀 승인'], takeaway: '최종 책임은 항상 명확한 사람에게 남겨야 합니다.' },
+  { title: '행동 전 근거 확인', subtitle: '생성 결과를 출발점으로 다룹니다.', mainMessage: '주요 주장을 출처와 연결하고 가정을 검토하면 결과의 신뢰도가 높아집니다.', labels: ['출처 추적', '가정 검토', '결정 기록'], takeaway: '검증은 초안을 설명 가능한 결과로 바꿉니다.' },
+  { title: '팀의 반복 학습', subtitle: '좋은 사용법을 업무 방식으로 만듭니다.', mainMessage: '공유 프롬프트와 검토 기준을 함께 다듬으면 책임 있는 사용이 팀 전체로 확장됩니다.', labels: ['공유 기준', '검토 규칙', '학습 순환'], takeaway: '반복 학습이 안전한 확장을 만듭니다.' },
+  { title: '더 나은 결과 측정', subtitle: '속도뿐 아니라 품질을 함께 봅니다.', mainMessage: '시간 절감과 함께 오류 발견, 설명 가능성, 의사결정 품질을 측정해야 합니다.', labels: ['시간 절감', '오류 발견', '품질 향상'], takeaway: '좋은 측정은 올바른 개선 방향을 보여 줍니다.' },
+  { title: '검증된 방식의 확장', subtitle: '신뢰를 만든 뒤 규모를 키웁니다.', mainMessage: '성공한 시범 운영은 교육, 거버넌스, 역할 체계를 갖춰 지속 가능한 운영 모델이 됩니다.', labels: ['시범 운영', '기준 정립', '확장 운영'], takeaway: '검증된 방식만 조직 전체로 확장합니다.' },
+  { title: '다음 학습 과제', subtitle: '도구 활용과 비판적 검토를 함께 기릅니다.', mainMessage: '변하는 도구를 이해하는 능력과 그 결과를 다시 질문하는 판단력이 모두 필요합니다.', labels: ['도구 활용', '비판 검토', '책임 실행'], takeaway: 'AI와 함께 일하는 능력은 질문하는 능력에서 시작합니다.' },
+  { title: '분명한 실행 약속', subtitle: '의도와 근거를 가진 다음 행동을 정합니다.', mainMessage: '발표의 끝은 더 많은 생성물이 아니라 책임자와 다음 행동이 명확한 결정이어야 합니다.', labels: ['책임자', '다음 행동', '진행 확인'], takeaway: '설명 가능한 결정으로 발표를 마무리합니다.' },
+];
+
 export function createMockDeckPlan(
   request: PptMakerRequest = samplePptMakerRequest,
   options: { id?: string; createdAt?: string } = {},
 ): PptDeckPlan {
-  const copies = request.targetLanguage === 'Korean' ? koreanSlideCopies : englishSlideCopies;
+  const copies = request.targetLanguage === 'Korean' ? readableKoreanSlideCopies : englishSlideCopies;
   const count = Math.max(3, Math.min(request.slideCount, copies.length));
   const createdAt = options.createdAt ?? new Date().toISOString();
   const slides = Array.from({ length: count }, (_, index) => {
@@ -221,13 +234,19 @@ export function createMockDeckPlan(
       archetype,
       visualStructure,
       ...copy,
+      imageSlot: {
+        id: `visual-${pageNumber}`,
+        purpose: 'A decorative visual asset that supports the editable slide message.',
+        placement: pageNumber === 1 ? 'right-hero' : pageNumber === count ? 'center-visual' : 'card-visual',
+        prompt: `Text-free editorial illustration for ${copy.labels.join(', ')}. Do not include words or numbers.`,
+      },
       imagePrompt: '',
     } satisfies SlidePlan;
   });
 
   return {
     id: options.id ?? 'mock-deck-plan-1',
-    title: request.targetLanguage === 'Korean' ? 'AI 시대의 판단과 실행' : 'AI-Ready Judgment And Execution',
+    title: request.targetLanguage === 'Korean' ? 'AI 판단과 실행' : 'AI-Ready Judgment And Execution',
     createdAt,
     request: { ...request, slideCount: count },
     slides,

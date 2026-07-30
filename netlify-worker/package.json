@@ -12,7 +12,8 @@
   },
   "dependencies": {
     "@netlify/functions": "^5.1.1",
-    "@supabase/supabase-js": "^2.52.1"
+    "@supabase/supabase-js": "^2.52.1",
+    "pptxgenjs": "^4.0.1"
   },
   "devDependencies": {
     "@types/node": "^22.15.3",

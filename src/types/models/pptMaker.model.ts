@@ -24,6 +24,21 @@ export type SlideVisualStructure =
   | 'case-story'
   | 'closing-commitment';
 
+export type SlideImagePlacement =
+  | 'right-hero'
+  | 'left-hero'
+  | 'center-visual'
+  | 'card-visual'
+  | 'hub-visual'
+  | 'full-bleed-visual';
+
+export interface SlideImageSlot {
+  id: string;
+  purpose: string;
+  placement: SlideImagePlacement;
+  prompt: string;
+}
+
 export interface StyleReference {
   id: string;
   name: string;
@@ -68,6 +83,7 @@ export interface SlidePlan {
   subtitle: string;
   labels: string[];
   takeaway: string;
+  imageSlot: SlideImageSlot;
   imagePrompt: string;
 }
 
@@ -95,6 +111,7 @@ export interface GeneratedSlideImage {
   imageUrl?: string;
   storagePath?: string;
   generationItemId?: string;
+  slotId?: string;
   prompt: string;
   provider: 'openai' | 'mock';
 }
@@ -126,7 +143,7 @@ export interface PptDocumentEnhancement {
   fileName: string;
   pptxUrl?: string;
   resultPath?: string;
-  generationMode?: 'claude-native' | 'claude-native-pending' | 'browser-fallback';
+  generationMode?: 'pptxgenjs-native' | 'pptxgenjs-native-pending' | 'claude-native' | 'claude-native-pending' | 'browser-fallback';
   pptxStatus?: 'processing' | 'succeeded' | 'failed';
   speakerNotes: Array<{
     pageNumber: number;
@@ -134,7 +151,7 @@ export interface PptDocumentEnhancement {
   }>;
   qaChecklist: string[];
   layouts: PptEditableSlideLayout[];
-  layoutSource: 'claude' | 'fallback';
+  layoutSource: 'pptxgenjs' | 'claude' | 'fallback';
 }
 
 export type PptEditableTextRole =

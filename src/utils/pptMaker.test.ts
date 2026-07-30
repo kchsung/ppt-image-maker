@@ -61,6 +61,12 @@ describe('pptMaker utilities', () => {
         mainMessage: '\uD55C\uAE00 \uBB38\uAD6C\uAC00 \uC0AC\uC6A9\uB418\uC5C8\uC2B5\uB2C8\uB2E4.',
         labels: ['One', 'Two', 'Three'],
         takeaway: 'English takeaway.',
+        imageSlot: {
+          id: 'visual-1',
+          purpose: 'Support the title with a text-free visual.',
+          placement: 'right-hero',
+          prompt: 'Text-free abstract editorial illustration.',
+        },
         imagePrompt: '',
       }],
     });

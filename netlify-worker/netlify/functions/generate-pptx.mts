@@ -1,5 +1,7 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+import PptxGenJS from 'pptxgenjs';
 
+type ImagePlacement = 'right-hero' | 'left-hero' | 'center-visual' | 'card-visual' | 'hub-visual' | 'full-bleed-visual';
 type SlidePlan = {
   id: string;
   pageNumber: number;
@@ -10,479 +12,252 @@ type SlidePlan = {
   subtitle: string;
   labels: string[];
   takeaway: string;
+  imageSlot?: { id: string; purpose: string; placement: ImagePlacement; prompt: string };
 };
-
 type DeckPlan = {
   id: string;
   title: string;
-  request: {
-    targetLanguage: 'English' | 'Korean';
-    audience: string;
-    purpose: string;
-    logoImageDataUrl?: string;
-  };
+  request: { targetLanguage: 'English' | 'Korean'; audience: string; purpose: string; logoImageDataUrl?: string };
   slides: SlidePlan[];
 };
-
-type SlideImage = {
-  id: string;
-  pageNumber: number;
-  imageDataUrl?: string;
-  imageUrl?: string;
-};
-
-type WorkerRequest = {
-  deckPlan?: DeckPlan;
-  imageDeck?: { generationJobId?: string; images?: SlideImage[] };
-  executionId?: string;
-};
-
-type ClaudeFile = { id?: string; filename?: string };
+type SlideImage = { id: string; pageNumber: number; imageDataUrl?: string; imageUrl?: string; slotId?: string };
+type WorkerRequest = { deckPlan?: DeckPlan; imageDeck?: { generationJobId?: string; images?: SlideImage[] }; executionId?: string };
 
 const PPTX_CONTENT_TYPE = 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
-// Keep each Claude request below the upstream connection window. A complete
-// deck is rebuilt in small batches while the same Claude container persists.
-const CLAUDE_MESSAGE_TIMEOUT_MS = 4 * 60 * 1_000;
-const SLIDES_PER_CLAUDE_REQUEST = 2;
-const CLAUDE_NETWORK_RETRY_COUNT = 2;
-const STATUS_HEARTBEAT_INTERVAL_MS = 60 * 1_000;
+const WIDE_WIDTH = 13.333;
+const WIDE_HEIGHT = 7.5;
+const COLORS = { navy: '0B2454', orange: 'FE6621', ink: '18253D', muted: '5F6F89', line: 'D8E1EF', pale: 'F3F6FB', warm: 'FFF7EE', white: 'FFFFFF' };
+const FONT = 'Pretendard';
 
 export async function runPptxWorker(request: Request): Promise<Response> {
   const secret = process.env.PPT_WORKER_SECRET;
-  if (!secret || request.headers.get('x-ppt-worker-secret') !== secret) {
-    return Response.json({ error: 'Unauthorized worker request.' }, { status: 401 });
-  }
+  if (!secret || request.headers.get('x-ppt-worker-secret') !== secret) return Response.json({ error: 'Unauthorized worker request.' }, { status: 401 });
 
   let jobId: string | undefined;
   let executionId: string | undefined;
   let supabase: SupabaseClient | null = null;
-
   try {
     const body = await request.json() as WorkerRequest;
     if (!body.deckPlan || !body.imageDeck?.generationJobId || !body.imageDeck.images?.length || !body.executionId) {
-      return Response.json({ error: 'deckPlan, generated slide images, and an execution ID are required.' }, { status: 400 });
+      return Response.json({ error: 'deckPlan, visual assets, and an execution ID are required.' }, { status: 400 });
     }
-
     jobId = body.imageDeck.generationJobId;
     executionId = body.executionId;
     supabase = createAdminClient();
-    const apiKey = requiredEnv('CLAUDE_API_KEY');
-    logEvent('pptx.worker.started', { jobId, executionId: body.executionId, slideCount: body.imageDeck.images.length });
+    logEvent('pptx.worker.started', { jobId, executionId, slideCount: body.deckPlan.slides.length });
+    await updateStatus(supabase, jobId, 'processing', null, 12, 'Loading generated visual assets', executionId);
 
-    const existingJob = await getExistingJob(supabase, jobId);
-    if (existingJob.result_path) {
-      await updateStatus(supabase, jobId, 'succeeded', null, 100, 'Ready to preview and download', body.executionId);
-      logEvent('pptx.worker.skipped_existing_output', { jobId, executionId: body.executionId });
-      return Response.json({ ok: true });
-    }
-
-    await generateNativePptx(apiKey, body.deckPlan, body.imageDeck.images, jobId, body.executionId, supabase);
-    await updateStatus(supabase, jobId, 'succeeded', null, 100, 'Ready to preview and download', body.executionId);
-    logEvent('pptx.worker.completed', { jobId, executionId: body.executionId });
+    const pptxBytes = await buildEditablePptx(body.deckPlan, body.imageDeck.images, async (completed, total) => {
+      const progress = 18 + Math.round((completed / total) * 68);
+      await updateStatus(supabase!, jobId!, 'processing', null, progress, `Assembling editable slide ${completed} of ${total}`, executionId!);
+    });
+    await updateStatus(supabase, jobId, 'processing', null, 90, 'Saving editable PPTX to Supabase Storage', executionId);
+    const storagePath = `${jobId}/final/${createFileName(body.deckPlan.title)}`;
+    const { error: uploadError } = await supabase.storage.from('ppt-generations').upload(storagePath, pptxBytes, { contentType: PPTX_CONTENT_TYPE, upsert: true });
+    if (uploadError) throw uploadError;
+    const { error: updateError } = await supabase.from('generation_jobs').update({
+      result_path: `ppt-generations/${storagePath}`,
+      error_message: null,
+      updated_at: new Date().toISOString(),
+    }).eq('id', jobId);
+    if (updateError) throw updateError;
+    await updateStatus(supabase, jobId, 'succeeded', null, 100, 'Ready to preview and download', executionId);
+    logEvent('pptx.worker.completed', { jobId, executionId });
     return Response.json({ ok: true });
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Native PPTX worker failed.';
-    console.error(JSON.stringify({ event: 'pptx.worker.failed', jobId: jobId ?? null, error: message }));
-    if (supabase && jobId && executionId) {
-      try {
-        await updateStatus(supabase, jobId, 'failed', message, 0, 'PPTX generation failed', executionId);
-      } catch (statusError) {
-        console.error(JSON.stringify({
-          event: 'pptx.worker.failure_status_update_failed',
-          jobId,
-          executionId,
-          error: statusError instanceof Error ? statusError.message : 'Unable to persist the failure status.',
-        }));
-      }
-    }
+    const message = error instanceof Error ? error.message : 'PptxGenJS worker failed.';
+    console.error(JSON.stringify({ event: 'pptx.worker.failed', jobId: jobId ?? null, executionId: executionId ?? null, error: message }));
+    if (supabase && jobId && executionId) await updateStatus(supabase, jobId, 'failed', message, 0, 'PPTX generation failed', executionId).catch(() => undefined);
     throw error;
   }
 }
 
 export default runPptxWorker;
 
-async function generateNativePptx(
-  apiKey: string,
+async function buildEditablePptx(
   deckPlan: DeckPlan,
-  slideImages: SlideImage[],
-  jobId: string,
-  executionId: string,
-  supabase: SupabaseClient,
-): Promise<void> {
-  const uploadedFileIds: string[] = [];
-  try {
-    const images = slideImages.slice().sort((left, right) => left.pageNumber - right.pageNumber);
-    if (images.length !== deckPlan.slides.length) {
-      throw new Error('Every approved slide needs a generated reference image.');
-    }
+  assets: SlideImage[],
+  onSlideComplete: (completed: number, total: number) => Promise<void>,
+): Promise<Uint8Array> {
+  const pptx = new (PptxGenJS as unknown as new () => any)();
+  pptx.layout = 'LAYOUT_WIDE';
+  pptx.author = 'QLEARN PPT Maker';
+  pptx.subject = 'Native editable presentation';
+  pptx.title = deckPlan.title;
+  pptx.company = 'QLEARN';
+  pptx.lang = deckPlan.request.targetLanguage === 'Korean' ? 'ko-KR' : 'en-US';
+  pptx.theme = { headFontFace: FONT, bodyFontFace: FONT, lang: pptx.lang };
+  pptx.defineLayout({ name: 'QLEARN_WIDE', width: WIDE_WIDTH, height: WIDE_HEIGHT });
+  pptx.layout = 'QLEARN_WIDE';
+  const assetByPage = new Map(assets.map((asset) => [asset.pageNumber, asset]));
 
-    await updateStatus(supabase, jobId, 'processing', null, 15, 'Uploading slide references to Claude', executionId);
-    const uploads = await Promise.all(images.map(async (image) => {
-      const file = await uploadSourceFile(apiKey, image.imageDataUrl ?? image.imageUrl, `slide-${String(image.pageNumber).padStart(2, '0')}.png`);
-      uploadedFileIds.push(file.id);
-      return { pageNumber: image.pageNumber, fileId: file.id, fileName: file.filename };
-    }));
-    const logoUpload = deckPlan.request.logoImageDataUrl
-      ? await uploadSourceFile(apiKey, deckPlan.request.logoImageDataUrl, 'logo.png')
-      : null;
-    if (logoUpload) uploadedFileIds.push(logoUpload.id);
+  for (const [index, plan] of deckPlan.slides.entries()) {
+    const slide = pptx.addSlide();
+    const imageData = await resolveImageData(assetByPage.get(plan.pageNumber));
+    renderSlide(slide, plan, imageData, deckPlan.request.logoImageDataUrl);
+    await onSlideComplete(index + 1, deckPlan.slides.length);
+  }
+  renderManualTemplateSlide(pptx.addSlide(), deckPlan, deckPlan.slides.length + 1);
+  const output = await pptx.write({ outputType: 'nodebuffer' });
+  return new Uint8Array(output as ArrayBuffer | Uint8Array);
+}
 
-    await updateStatus(supabase, jobId, 'processing', null, 35, 'Claude is rebuilding editable slides in small batches', executionId);
-    logEvent('pptx.worker.claude_rebuild_started', { jobId, executionId });
-    const heartbeat = setInterval(() => {
-      void updateStatus(supabase, jobId, 'processing', null, 35, 'Claude is rebuilding editable slides in small batches', executionId)
-        .then(() => logEvent('pptx.worker.claude_rebuild_heartbeat', { jobId, executionId }))
-        .catch((error: unknown) => {
-          console.error(JSON.stringify({
-            event: 'pptx.worker.heartbeat_failed',
-            jobId,
-            executionId,
-            error: error instanceof Error ? error.message : 'Unable to update PPTX progress.',
-          }));
-        });
-    }, STATUS_HEARTBEAT_INTERVAL_MS);
+function renderSlide(slide: any, plan: SlidePlan, imageData: string | null, logoData: string | undefined): void {
+  slide.background = { color: COLORS.white };
+  slide.addShape('rect', { x: 0, y: 0, w: WIDE_WIDTH, h: WIDE_HEIGHT, line: { color: COLORS.white, transparency: 100 }, fill: { color: COLORS.white } });
+  slide.addShape('rect', { x: 0.52, y: 0.52, w: 0.06, h: 1.2, line: { color: COLORS.orange, transparency: 100 }, fill: { color: COLORS.orange } });
+  addText(slide, plan.title, 0.76, 0.5, 8.8, 0.48, 25, COLORS.navy, true);
+  addText(slide, plan.subtitle, 0.76, 1.03, 8.8, 0.32, 11.5, COLORS.muted, false);
+  addLogo(slide, logoData);
 
-    let response: Record<string, unknown>;
-    try {
-      response = await createNativePresentation(apiKey, deckPlan, uploads, logoUpload, async (completedBatches, totalBatches) => {
-        const progress = 35 + Math.round((completedBatches / totalBatches) * 40);
-        await updateStatus(
-          supabase,
-          jobId,
-          'processing',
-          null,
-          progress,
-          `Claude rebuilt batch ${completedBatches} of ${totalBatches}`,
-          executionId,
-        );
+  const imageBox = getImageBox(plan.imageSlot?.placement ?? 'right-hero', plan.visualStructure);
+  renderStructure(slide, plan, imageBox);
+  if (imageData) addAsset(slide, imageData, imageBox);
+  addText(slide, plan.takeaway, 0.76, 6.76, 10.95, 0.3, 10.5, COLORS.navy, true);
+  slide.addShape('line', { x: 0.52, y: 6.52, w: 12.25, h: 0, line: { color: COLORS.line, width: 1 } });
+  slide.addShape('ellipse', { x: 12.15, y: 6.57, w: 0.5, h: 0.5, line: { color: COLORS.navy, transparency: 100 }, fill: { color: COLORS.navy } });
+  addText(slide, String(plan.pageNumber).padStart(2, '0'), 12.15, 6.69, 0.5, 0.16, 9.5, COLORS.white, true, 'center');
+}
+
+function renderStructure(slide: any, plan: SlidePlan, imageBox: Box): void {
+  const labels = plan.labels.slice(0, 5);
+  const addLabel = (label: string, x: number, y: number, w: number, h = 0.52) => {
+    slide.addShape('roundRect', { x, y, w, h, rectRadius: 0.08, fill: { color: COLORS.pale }, line: { color: COLORS.line, width: 1 } });
+    addText(slide, label, x + 0.08, y + 0.16, w - 0.16, h - 0.16, 10.5, COLORS.navy, true, 'center');
+  };
+  const addMessage = (x: number, y: number, w: number, h: number) => addText(slide, plan.mainMessage, x, y, w, h, 14, COLORS.ink, false);
+
+  switch (plan.visualStructure) {
+    case 'hero-visual':
+      addMessage(0.86, 2.05, 5.2, 1.05);
+      labels.slice(0, 3).forEach((label, index) => addLabel(label, 0.86 + index * 1.74, 3.5, 1.52));
+      break;
+    case 'message-emphasis':
+      slide.addShape('roundRect', { x: 0.86, y: 2.15, w: 7.1, h: 1.52, rectRadius: 0.12, fill: { color: COLORS.navy }, line: { color: COLORS.navy, transparency: 100 } });
+      addText(slide, plan.mainMessage, 1.15, 2.58, 6.52, 0.65, 20, COLORS.white, true, 'center');
+      labels.slice(0, 3).forEach((label, index) => addLabel(label, 1.05 + index * 2.2, 4.25, 1.9));
+      break;
+    case 'side-by-side-comparison':
+    case 'before-after-mapping':
+      addPanel(slide, labels[0] ?? 'Current', 0.86, 2.15, 2.72, 2.6, COLORS.pale);
+      addPanel(slide, labels[1] ?? 'Future', 4.1, 2.15, 2.72, 2.6, COLORS.warm);
+      slide.addShape('chevron', { x: 3.65, y: 3.2, w: 0.3, h: 0.45, fill: { color: COLORS.orange }, line: { color: COLORS.orange, transparency: 100 } });
+      addMessage(0.92, 5.02, 5.9, 0.72);
+      break;
+    case 'numbered-process':
+    case 'roadmap':
+      labels.slice(0, 4).forEach((label, index) => {
+        const x = 0.88 + index * 1.54;
+        slide.addShape('ellipse', { x: x + 0.42, y: 2.25, w: 0.52, h: 0.52, fill: { color: index % 2 ? COLORS.orange : COLORS.navy }, line: { color: COLORS.white, transparency: 100 } });
+        addText(slide, String(index + 1), x + 0.42, 2.39, 0.52, 0.14, 9.5, COLORS.white, true, 'center');
+        addLabel(label, x, 2.98, 1.36, 0.74);
+        if (index < labels.length - 1) slide.addShape('line', { x: x + 1.36, y: 2.5, w: 0.18, h: 0, line: { color: COLORS.line, width: 2 } });
       });
-    } finally {
-      clearInterval(heartbeat);
-    }
-    const pptxFileId = await findGeneratedPptxFile(apiKey, response);
-
-    await updateStatus(supabase, jobId, 'processing', null, 80, 'Downloading the generated PPTX', executionId);
-    const pptxBytes = await downloadClaudeFile(apiKey, pptxFileId);
-    const fileName = createFileName(deckPlan.title);
-    const storagePath = `${jobId}/final/${fileName}`;
-
-    await updateStatus(supabase, jobId, 'processing', null, 92, 'Saving the PPTX to Supabase Storage', executionId);
-    const { error: uploadError } = await supabase.storage.from('ppt-generations').upload(storagePath, pptxBytes, {
-      contentType: PPTX_CONTENT_TYPE,
-      upsert: true,
-    });
-    if (uploadError) throw uploadError;
-
-    const { error: updateError } = await supabase
-      .from('generation_jobs')
-      .update({ result_path: `ppt-generations/${storagePath}`, error_message: null, updated_at: new Date().toISOString() })
-      .eq('id', jobId);
-    if (updateError) throw updateError;
-  } finally {
-    const cleanup = await Promise.allSettled(uploadedFileIds.map((fileId) => deleteClaudeFile(apiKey, fileId)));
-    cleanup.forEach((result) => {
-      if (result.status === 'rejected') {
-        console.warn(JSON.stringify({
-          event: 'pptx.worker.claude_file_cleanup_failed',
-          jobId,
-          error: result.reason instanceof Error ? result.reason.message : 'Unable to delete a Claude source file.',
-        }));
-      }
-    });
-  }
-}
-
-async function createNativePresentation(
-  apiKey: string,
-  deckPlan: DeckPlan,
-  uploads: Array<{ pageNumber: number; fileId: string; fileName: string }>,
-  logoUpload: { id: string; filename: string } | null,
-  onBatchComplete: (completedBatches: number, totalBatches: number) => Promise<void>,
-): Promise<Record<string, unknown>> {
-  const model = process.env.CLAUDE_MODEL || 'claude-sonnet-5';
-  const batches = chunk(uploads, SLIDES_PER_CLAUDE_REQUEST);
-  let containerId: string | null = null;
-  let payload: Record<string, unknown> | null = null;
-
-  for (const [batchIndex, batch] of batches.entries()) {
-    const isFirstBatch = batchIndex === 0;
-    const isFinalBatch = batchIndex === batches.length - 1;
-    const batchSlides = batch.map((upload) => {
-      const slide = deckPlan.slides.find((candidate) => candidate.pageNumber === upload.pageNumber);
-      if (!slide) throw new Error(`Approved copy is missing for slide ${upload.pageNumber}.`);
-      return { ...slide, sourceImage: upload };
-    });
-    const content = [
-      {
-        type: 'text',
-        text: JSON.stringify({
-          task: isFirstBatch
-            ? 'Create the first batch of a final native editable PowerPoint presentation.'
-            : 'Continue the existing PowerPoint file in the container and add the next slide batch.',
-          batch: `${batchIndex + 1} of ${batches.length}`,
-          outputFile: 'qlearn-editable-deck.pptx',
-          presentation: { title: deckPlan.title, request: deckPlan.request },
-          slidesToBuild: batchSlides,
-          logoAsset: isFirstBatch && logoUpload
-            ? { fileId: logoUpload.id, fileName: logoUpload.filename, position: 'top-right' }
-            : null,
-          finalBatch: isFinalBatch,
-          nonNegotiableRules: [
-            'Use the pptx skill and code execution to create or update qlearn-editable-deck.pptx as a real PowerPoint file, never as full-slide screenshots.',
-            'Inspect each supplied source image and reproduce the approved slide copy as native editable text using Pretendard or a compatible sans-serif fallback.',
-            'Match text position, hierarchy, color treatment, and blank surfaces from each source image. Keep only complex illustrations as raster assets.',
-            'Respect each visualStructure so slide compositions remain distinct. Keep text readable, unclipped, non-overlapping, and in the requested language.',
-            'Place the provided logo at top-right, or leave an editable Logo placeholder when no logo is supplied.',
-            ...(isFinalBatch ? ['Add one final editable manual template slide matching the deck style, then attach qlearn-editable-deck.pptx as a code execution output file.'] : ['Save qlearn-editable-deck.pptx before responding so the next batch can continue it.']),
-          ],
-        }),
-      },
-      ...batch.flatMap((upload) => [
-        { type: 'image', source: { type: 'file', file_id: upload.fileId } },
-        { type: 'container_upload', file_id: upload.fileId },
-      ]),
-      ...(isFirstBatch && logoUpload ? [
-        { type: 'image', source: { type: 'file', file_id: logoUpload.id } },
-        { type: 'container_upload', file_id: logoUpload.id },
-      ] : []),
-    ];
-
-    payload = await completeClaudeBatch(apiKey, {
-      model,
-      max_tokens: 16000,
-      container: containerId
-        ? { id: containerId }
-        : { skills: [{ type: 'anthropic', skill_id: 'pptx', version: 'latest' }] },
-      tools: [{ type: 'code_execution_20260521', name: 'code_execution' }],
-      messages: [{ role: 'user', content }],
-    }, batchIndex + 1, batches.length);
-    containerId = getContainerId(payload);
-    if (!containerId) throw new Error(`Claude did not preserve a reusable container after PPTX batch ${batchIndex + 1}.`);
-    await onBatchComplete(batchIndex + 1, batches.length);
-  }
-
-  if (!payload) throw new Error('Claude did not produce a PPTX generation response.');
-  return payload;
-}
-
-async function uploadSourceFile(apiKey: string, source: string | undefined, defaultFileName: string): Promise<{ id: string; filename: string }> {
-  if (!source) throw new Error(`${defaultFileName} is missing.`);
-  const { bytes, mimeType } = await readImage(source);
-  const extension = mimeType === 'image/jpeg' ? 'jpg' : mimeType === 'image/webp' ? 'webp' : 'png';
-  const form = new FormData();
-  const fileName = defaultFileName.replace(/\.[^.]+$/u, `.${extension}`);
-  const blobBytes = new Uint8Array(bytes.byteLength);
-  blobBytes.set(bytes);
-  form.append('file', new Blob([blobBytes.buffer], { type: mimeType }), fileName);
-  const response = await fetch('https://api.anthropic.com/v1/files', {
-    method: 'POST', headers: anthropicHeaders(apiKey), body: form,
-  });
-  const payload = await response.json() as ClaudeFile & { error?: { message?: string } };
-  if (!response.ok || !payload.id) throw new Error(payload.error?.message ?? `Failed to upload ${defaultFileName} to Claude Files API.`);
-  return { id: payload.id, filename: payload.filename ?? fileName };
-}
-
-async function completeClaudeBatch(
-  apiKey: string,
-  body: Record<string, unknown>,
-  batchNumber: number,
-  totalBatches: number,
-): Promise<Record<string, unknown>> {
-  let payload = await sendClaudeMessage(apiKey, body, batchNumber, totalBatches);
-
-  for (let resumeCount = 0; payload.stop_reason === 'pause_turn' && resumeCount < 3; resumeCount += 1) {
-    const containerId = getContainerId(payload);
-    const assistantContent = payload.content;
-    if (!containerId || !Array.isArray(assistantContent)) {
-      throw new Error(`Claude paused PPTX batch ${batchNumber} without a reusable container response.`);
-    }
-    payload = await sendClaudeMessage(apiKey, {
-      ...body,
-      container: { id: containerId },
-      messages: [
-        ...(Array.isArray(body.messages) ? body.messages : []),
-        { role: 'assistant', content: assistantContent },
-        { role: 'user', content: `Continue PPTX batch ${batchNumber} of ${totalBatches}. Save the partial deck before responding.` },
-      ],
-    }, batchNumber, totalBatches);
-  }
-  if (payload.stop_reason === 'pause_turn') {
-    throw new Error(`Claude PPTX batch ${batchNumber} exceeded the continuation limit. Retry the PPTX job.`);
-  }
-  return payload;
-}
-
-async function sendClaudeMessage(
-  apiKey: string,
-  body: Record<string, unknown>,
-  batchNumber: number,
-  totalBatches: number,
-): Promise<Record<string, unknown>> {
-  let lastError: unknown;
-  for (let attempt = 1; attempt <= CLAUDE_NETWORK_RETRY_COUNT; attempt += 1) {
-    try {
-      const response = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: { ...anthropicHeaders(apiKey), 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-        signal: AbortSignal.timeout(CLAUDE_MESSAGE_TIMEOUT_MS),
+      addMessage(0.9, 4.35, 5.9, 0.7);
+      break;
+    case 'hub-and-spoke':
+      slide.addShape('ellipse', { x: 2.9, y: 3.05, w: 1.55, h: 1.2, fill: { color: COLORS.navy }, line: { color: COLORS.navy, transparency: 100 } });
+      addText(slide, labels[0] ?? 'Core', 3.05, 3.52, 1.25, 0.2, 14, COLORS.white, true, 'center');
+      labels.slice(1, 4).forEach((label, index) => {
+        const positions = [[0.9, 2.25], [5.25, 2.25], [5.25, 4.55]];
+        const [x, y] = positions[index] ?? [0.9, 4.55];
+        addLabel(label, x, y, 1.55, 0.66);
+        slide.addShape('line', { x: x < 3 ? x + 1.55 : 4.45, y: y + 0.32, w: x < 3 ? 0.45 : 0.8, h: 0.6, line: { color: COLORS.line, width: 1.5 } });
       });
-      const payload = await response.json() as Record<string, unknown> & { error?: { message?: string } };
-      if (!response.ok) throw new Error(payload.error?.message ?? 'Claude pptx skill request failed.');
-      return payload;
-    } catch (error) {
-      lastError = error;
-      const isLastAttempt = attempt === CLAUDE_NETWORK_RETRY_COUNT;
-      if (isLastAttempt) break;
-      console.warn(JSON.stringify({
-        event: 'pptx.worker.claude_batch_retry',
-        batchNumber,
-        totalBatches,
-        attempt,
-        error: describeClaudeRequestError(error),
-      }));
-      await delay(attempt * 2_000);
-    }
+      break;
+    case 'metrics-dashboard':
+      labels.slice(0, 3).forEach((label, index) => {
+        const x = 0.86 + index * 2.02;
+        slide.addShape('roundRect', { x, y: 2.2, w: 1.78, h: 1.32, rectRadius: 0.1, fill: { color: COLORS.pale }, line: { color: COLORS.line, width: 1 } });
+        addText(slide, label, x + 0.12, 2.48, 1.54, 0.22, 10, COLORS.muted, true, 'center');
+        addText(slide, ['01', '02', '03'][index], x + 0.12, 2.82, 1.54, 0.3, 22, COLORS.navy, true, 'center');
+      });
+      addMessage(0.88, 4.05, 5.85, 0.75);
+      break;
+    case 'pyramid-framework':
+      labels.slice(0, 4).reverse().forEach((label, index) => {
+        const width = 2.0 + index * 0.85;
+        const x = 3.55 - width / 2;
+        const y = 4.9 - index * 0.63;
+        slide.addShape('trapezoid', { x, y, w: width, h: 0.48, fill: { color: index % 2 ? COLORS.warm : COLORS.pale }, line: { color: COLORS.line, width: 1 } });
+        addText(slide, label, x, y + 0.13, width, 0.16, 9.5, COLORS.navy, true, 'center');
+      });
+      break;
+    case 'case-story':
+    case 'card-grid':
+    case 'closing-commitment':
+    default:
+      labels.slice(0, 4).forEach((label, index) => {
+        const x = 0.86 + (index % 2) * 3.0;
+        const y = 2.15 + Math.floor(index / 2) * 1.08;
+        addPanel(slide, label, x, y, 2.55, 0.83, index % 2 ? COLORS.warm : COLORS.pale);
+      });
+      addMessage(0.9, 4.65, 5.9, 0.72);
+      break;
   }
-
-  throw new Error(
-    `Claude PPTX batch ${batchNumber} of ${totalBatches} could not be completed: ${describeClaudeRequestError(lastError)}`,
-  );
+  if (plan.visualStructure !== 'hero-visual' && plan.visualStructure !== 'closing-commitment') addText(slide, plan.mainMessage, 0.86, 5.35, 5.95, 0.6, 11.5, COLORS.muted, false);
+  void imageBox;
 }
 
-async function findGeneratedPptxFile(apiKey: string, response: Record<string, unknown>): Promise<string> {
-  const fileIds = collectFileIds(response);
-  if (fileIds.length === 0) throw new Error('Claude pptx skill did not return a generated file.');
-  const files = await Promise.all(fileIds.map(async (fileId) => ({ fileId, metadata: await getClaudeFileMetadata(apiKey, fileId) })));
-  return files.find(({ metadata }) => metadata.filename?.toLowerCase().endsWith('.pptx'))?.fileId ?? files.at(-1)!.fileId;
+function getImageBox(placement: ImagePlacement, structure: string): Box {
+  if (placement === 'left-hero') return { x: 0.85, y: 2.0, w: 4.75, h: 3.75 };
+  if (placement === 'center-visual' || placement === 'hub-visual') return { x: 7.75, y: 1.82, w: 4.45, h: 4.45 };
+  if (placement === 'full-bleed-visual') return { x: 7.15, y: 1.62, w: 5.3, h: 4.85 };
+  if (placement === 'card-visual' || structure === 'card-grid') return { x: 7.35, y: 2.05, w: 4.9, h: 3.85 };
+  return { x: 7.55, y: 1.82, w: 4.72, h: 4.65 };
 }
 
-function collectFileIds(response: Record<string, unknown>): string[] {
-  const content = Array.isArray(response.content) ? response.content : [];
-  const ids = content.flatMap((block) => {
-    if (!isRecord(block) || block.type !== 'bash_code_execution_tool_result' || !isRecord(block.content)) return [];
-    const outputs = Array.isArray(block.content.content) ? block.content.content : [];
-    return outputs.flatMap((output) => isRecord(output) && typeof output.file_id === 'string' ? [output.file_id] : []);
-  });
-  return Array.from(new Set(ids));
+type Box = { x: number; y: number; w: number; h: number };
+function addPanel(slide: any, title: string, x: number, y: number, w: number, h: number, fill: string): void {
+  slide.addShape('roundRect', { x, y, w, h, rectRadius: 0.08, fill: { color: fill }, line: { color: COLORS.line, width: 1 } });
+  addText(slide, title, x + 0.12, y + h / 2 - 0.12, w - 0.24, 0.24, 11, COLORS.navy, true, 'center');
 }
-
-async function getClaudeFileMetadata(apiKey: string, fileId: string): Promise<ClaudeFile> {
-  const response = await fetch(`https://api.anthropic.com/v1/files/${fileId}`, { headers: anthropicHeaders(apiKey) });
-  const payload = await response.json() as ClaudeFile & { error?: { message?: string } };
-  if (!response.ok) throw new Error(payload.error?.message ?? `Unable to read Claude output file ${fileId}.`);
-  return payload;
+function addAsset(slide: any, data: string, box: Box): void {
+  slide.addShape('roundRect', { x: box.x - 0.05, y: box.y - 0.05, w: box.w + 0.1, h: box.h + 0.1, rectRadius: 0.1, fill: { color: COLORS.white }, line: { color: COLORS.line, width: 1.2 } });
+  slide.addImage({ data, x: box.x, y: box.y, w: box.w, h: box.h, sizing: { type: 'contain', x: box.x, y: box.y, w: box.w, h: box.h } });
 }
-
-async function downloadClaudeFile(apiKey: string, fileId: string): Promise<Uint8Array> {
-  const response = await fetch(`https://api.anthropic.com/v1/files/${fileId}/content`, { headers: anthropicHeaders(apiKey) });
-  if (!response.ok) throw new Error(`Unable to download Claude PPTX output (${response.status}).`);
-  return new Uint8Array(await response.arrayBuffer());
-}
-
-async function deleteClaudeFile(apiKey: string, fileId: string): Promise<void> {
-  await fetch(`https://api.anthropic.com/v1/files/${fileId}`, { method: 'DELETE', headers: anthropicHeaders(apiKey) });
-}
-
-async function readImage(source: string): Promise<{ bytes: Uint8Array; mimeType: string }> {
-  if (source.startsWith('data:')) {
-    const match = source.match(/^data:(image\/(?:png|jpeg|webp));base64,(.+)$/u);
-    if (!match) throw new Error('Image data URL is invalid.');
-    return { bytes: Uint8Array.from(Buffer.from(match[2], 'base64')), mimeType: match[1] };
+function addLogo(slide: any, logoData?: string): void {
+  if (logoData) slide.addImage({ data: logoData, x: 11.4, y: 0.43, w: 1.3, h: 0.45, sizing: { type: 'contain', x: 11.4, y: 0.43, w: 1.3, h: 0.45 } });
+  else {
+    slide.addShape('roundRect', { x: 11.45, y: 0.42, w: 1.14, h: 0.42, rectRadius: 0.06, fill: { color: COLORS.pale }, line: { color: COLORS.line, width: 0.8 } });
+    addText(slide, 'Logo', 11.45, 0.55, 1.14, 0.12, 8.5, COLORS.muted, false, 'center');
   }
+}
+function addText(slide: any, value: string, x: number, y: number, w: number, h: number, fontSize: number, color: string, bold: boolean, align: 'left' | 'center' | 'right' = 'left'): void {
+  slide.addText(value, { x, y, w, h, fontFace: FONT, fontSize, color, bold, margin: 0, breakLine: false, fit: 'shrink', valign: 'mid', align, paraSpaceAfterPt: 0, autoFit: true });
+}
+function renderManualTemplateSlide(slide: any, deckPlan: DeckPlan, pageNumber: number): void {
+  slide.background = { color: COLORS.white };
+  slide.addShape('rect', { x: 0.52, y: 0.52, w: 0.06, h: 1.2, line: { color: COLORS.orange, transparency: 100 }, fill: { color: COLORS.orange } });
+  addText(slide, deckPlan.request.targetLanguage === 'Korean' ? '수동 추가 장표 템플릿' : 'Manual Add-On Slide Template', 0.76, 0.5, 8.7, 0.45, 24, COLORS.navy, true);
+  addText(slide, deckPlan.request.targetLanguage === 'Korean' ? '이 장표의 텍스트와 도형을 복제하여 같은 스타일로 내용을 추가하세요.' : 'Duplicate these editable objects to add a slide in the same style.', 0.76, 1.03, 9.8, 0.3, 11.5, COLORS.muted, false);
+  ['Title', 'Key message', 'Supporting point', 'Action'].forEach((label, index) => addPanel(slide, label, 0.9 + index * 2.85, 2.35, 2.35, 1.2, index % 2 ? COLORS.warm : COLORS.pale));
+  slide.addShape('roundRect', { x: 0.9, y: 4.35, w: 11.45, h: 1.2, rectRadius: 0.1, fill: { color: COLORS.pale }, line: { color: COLORS.line, width: 1 } });
+  addText(slide, deckPlan.request.targetLanguage === 'Korean' ? '핵심 메시지 또는 실행 제안을 여기에 입력하세요.' : 'Type the key takeaway or next action here.', 1.25, 4.78, 10.75, 0.25, 15, COLORS.navy, true, 'center');
+  addLogo(slide, deckPlan.request.logoImageDataUrl);
+  slide.addShape('line', { x: 0.52, y: 6.52, w: 12.25, h: 0, line: { color: COLORS.line, width: 1 } });
+  addText(slide, String(pageNumber).padStart(2, '0'), 12.15, 6.69, 0.5, 0.16, 9.5, COLORS.navy, true, 'center');
+}
+
+async function resolveImageData(asset: SlideImage | undefined): Promise<string | null> {
+  const source = asset?.imageDataUrl ?? asset?.imageUrl;
+  if (!source) return null;
+  if (source.startsWith('data:')) return source;
   const response = await fetch(source);
-  if (!response.ok) throw new Error(`Unable to load generated slide image (${response.status}).`);
-  return { bytes: new Uint8Array(await response.arrayBuffer()), mimeType: response.headers.get('content-type') ?? 'image/png' };
+  if (!response.ok) throw new Error(`Unable to load visual asset (${response.status}).`);
+  const bytes = Buffer.from(await response.arrayBuffer()).toString('base64');
+  return `data:${response.headers.get('content-type') ?? 'image/png'};base64,${bytes}`;
 }
 
-async function updateStatus(
-  supabase: SupabaseClient,
-  jobId: string,
-  status: 'processing' | 'succeeded' | 'failed',
-  errorMessage: string | null,
-  progress: number,
-  phase: string,
-  executionId: string,
-): Promise<void> {
-  const job = await getExistingJob(supabase, jobId);
-  const request = isRecord(job.request) ? job.request : {};
-  const { error } = await supabase.from('generation_jobs').update({
-    request: {
-      ...request,
-      pptxGeneration: {
-        status,
-        errorMessage,
-        progress,
-        phase,
-        executor: 'netlify-worker',
-        executionId,
-        updatedAt: new Date().toISOString(),
-      },
-    },
-    updated_at: new Date().toISOString(),
-  }).eq('id', jobId);
+async function updateStatus(supabase: SupabaseClient, jobId: string, status: 'processing' | 'succeeded' | 'failed', errorMessage: string | null, progress: number, phase: string, executionId: string): Promise<void> {
+  const { data: job, error: readError } = await supabase.from('generation_jobs').select('request').eq('id', jobId).single();
+  if (readError) throw readError;
+  const request = isRecord(job?.request) ? job.request : {};
+  const { error } = await supabase.from('generation_jobs').update({ request: { ...request, pptxGeneration: { status, errorMessage, progress, phase, executor: 'netlify-worker', executionId, updatedAt: new Date().toISOString() } }, updated_at: new Date().toISOString() }).eq('id', jobId);
   if (error) throw error;
 }
-
-async function getExistingJob(supabase: SupabaseClient, jobId: string): Promise<{ request: unknown; result_path: string | null }> {
-  const { data, error } = await supabase.from('generation_jobs').select('request,result_path').eq('id', jobId).single();
-  if (error || !data) throw error ?? new Error('PPT generation job was not found.');
-  return data;
-}
-
-function createAdminClient(): SupabaseClient {
-  return createClient(requiredEnv('SUPABASE_URL'), requiredEnv('SUPABASE_SERVICE_ROLE_KEY'));
-}
-
-function requiredEnv(name: string): string {
-  const value = process.env[name];
-  if (!value) throw new Error(`${name} is not configured.`);
-  return value;
-}
-
-function anthropicHeaders(apiKey: string): Record<string, string> {
-  return {
-    'x-api-key': apiKey,
-    'anthropic-version': '2023-06-01',
-    'anthropic-beta': 'skills-2025-10-02,files-api-2025-04-14',
-  };
-}
-
-function getContainerId(response: Record<string, unknown>): string | null {
-  return isRecord(response.container) && typeof response.container.id === 'string' ? response.container.id : null;
-}
-
-function createFileName(title: string): string {
-  const cleaned = title.replace(/[\\/:*?"<>|]+/g, '-').replace(/\s+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
-  return `${cleaned || 'qlearn-editable-deck'}.pptx`;
-}
-
-function chunk<T>(items: T[], size: number): T[][] {
-  const groups: T[][] = [];
-  for (let index = 0; index < items.length; index += size) {
-    groups.push(items.slice(index, index + size));
-  }
-  return groups;
-}
-
-function delay(milliseconds: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, milliseconds));
-}
-
-function describeClaudeRequestError(error: unknown): string {
-  if (error instanceof DOMException && error.name === 'TimeoutError') {
-    return 'Claude did not respond within four minutes for this small slide batch.';
-  }
-  if (error instanceof Error && error.message === 'fetch failed') {
-    return 'The network connection to Claude was interrupted.';
-  }
-  return error instanceof Error ? error.message : 'Unknown Claude request error.';
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
-}
-
-function logEvent(event: string, details: Record<string, string | number>): void {
-  console.info(JSON.stringify({ event, ...details }));
-}
+function createAdminClient(): SupabaseClient { return createClient(requiredEnv('SUPABASE_URL'), requiredEnv('SUPABASE_SERVICE_ROLE_KEY')); }
+function requiredEnv(name: string): string { const value = process.env[name]; if (!value) throw new Error(`${name} is not configured.`); return value; }
+function createFileName(title: string): string { const cleaned = title.replace(/[\\/:*?"<>|]+/g, '-').replace(/\s+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, ''); return `${cleaned || 'qlearn-editable-deck'}.pptx`; }
+function isRecord(value: unknown): value is Record<string, unknown> { return typeof value === 'object' && value !== null; }
+function logEvent(event: string, details: Record<string, string | number>): void { console.info(JSON.stringify({ event, ...details })); }

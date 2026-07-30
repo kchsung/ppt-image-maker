@@ -52,7 +52,7 @@ Deno.serve(async (req) => {
       status: 'processing',
       errorMessage: null,
       progress: 5,
-      phase: 'Queued for Netlify PPTX worker',
+      phase: 'Queued for PptxGenJS worker',
       executor: 'netlify-worker',
       executionId,
     });
@@ -84,14 +84,14 @@ Deno.serve(async (req) => {
     return json({
       title: body.deckPlan.title,
       fileName: createFileName(body.deckPlan.title),
-      generationMode: 'claude-native-pending',
+      generationMode: 'pptxgenjs-native-pending',
       pptxStatus: 'processing',
       pptxExecutor: 'netlify-worker',
       pptxExecutionId: executionId,
       speakerNotes: [],
-      qaChecklist: ['Netlify is creating the native editable PPTX in the background.'],
+      qaChecklist: ['Netlify is assembling native editable text, shapes, and visual asset slots with PptxGenJS in the background.'],
       layouts: [],
-      layoutSource: 'claude',
+      layoutSource: 'pptxgenjs',
     }, 202);
   } catch (error) {
     return json({ error: error instanceof Error ? error.message : 'Netlify PPTX worker dispatch failed.' }, 500);

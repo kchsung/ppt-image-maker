@@ -76,7 +76,7 @@ export function GeneratedImageDeckPanel({
             <div className="space-y-5">
               <div className="rounded-md border border-border bg-surface-muted px-4 py-3 text-sm text-text-subtle">
                 {hasNativePptx
-                  ? 'The gallery below contains the OpenAI reference images used by Claude during native PPTX reconstruction. Use Preview PPTX to inspect the final document.'
+                  ? 'The gallery below contains text-free OpenAI visual assets. The final native text and shapes are assembled by PptxGenJS; use Preview PPTX to inspect the document.'
                   : 'The gallery below is the source-image preview used for local fallback export.'}
               </div>
               <figure className="overflow-hidden rounded-md border border-border bg-surface">

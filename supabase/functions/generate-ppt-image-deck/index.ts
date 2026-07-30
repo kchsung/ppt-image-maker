@@ -10,6 +10,12 @@ type SlidePlan = {
   mainMessage: string;
   labels: string[];
   takeaway: string;
+  imageSlot?: {
+    id: string;
+    purpose: string;
+    placement: string;
+    prompt: string;
+  };
   imagePrompt: string;
 };
 
@@ -112,6 +118,7 @@ Deno.serve(async (req) => {
       imageUrl: storageResult?.publicUrl,
       storagePath: storageResult?.path,
       generationItemId: itemId,
+      slotId: slide.imageSlot?.id,
       prompt,
       provider: 'openai',
     });
@@ -184,23 +191,17 @@ async function resolveGenerationInput(
 
 function buildSlideImagePrompt(deckPlan: PptDeckPlan, slide: SlidePlan): string {
   return [
-    slide.imagePrompt,
+    slide.imageSlot?.prompt ?? slide.imagePrompt,
     '',
-    'Create a polished 16:9 presentation reference slide with the approved copy visible.',
-    'The final PPTX will be rebuilt by Claude from this image, so use the exact approved title, subtitle, labels, and takeaway that were provided above.',
-    'Do not repeat the selected template layout. Apply its palette, typography mood, icon language, and footer treatment to this slide-specific composition only.',
-    'Place copy on simple, high-contrast background regions and avoid text over complex illustrations so Claude can separate visual assets from editable text.',
-    'Do not invent or render a brand logo. Reserve a clean logo area in the top-right corner without any text.',
-    deckPlan.request.logoImageDataUrl
-      ? 'A real logo was uploaded and will be inserted later in PowerPoint at the top-right, so keep that corner clean.'
-      : 'No logo was uploaded. Keep the top-right logo area clean and empty; PowerPoint will add its editable logo placeholder there.',
-    'Typography style should resemble Pretendard: modern, clean, readable Korean/English sans-serif.',
-    `Audience: ${deckPlan.request.audience}`,
-    `Purpose: ${deckPlan.request.purpose}`,
-    `Language context: ${deckPlan.request.targetLanguage}`,
+    'Create a single visual asset, not a full PowerPoint slide or a complete 16:9 page.',
+    `This asset will be placed in a ${slide.imageSlot?.placement ?? 'right-hero'} region of an editable PPTX.`,
+    `Asset purpose: ${slide.imageSlot?.purpose ?? 'Support the slide message visually.'}`,
+    `Style: ${deckPlan.request.styleReference.notes}`,
+    `Use ${deckPlan.request.styleReference.primaryColorLabel} as the primary color and ${deckPlan.request.styleReference.accentColorLabel} for emphasis.`,
     `Slide concept: ${slide.mainMessage}`,
-    `Story role: ${slide.archetype}. Required visual structure: ${slide.visualStructure}.`,
-    'Preserve the required visual structure instead of reusing the previous slide layout.',
+    `Visual concepts: ${slide.labels.join(', ')}.`,
+    'Do not render readable text, letters, numbers, labels, logos, titles, subtitles, footers, page numbers, cards, arrows, slide frames, or placeholders.',
+    'Use a transparent-feeling or simple clean background where practical. The native PptxGenJS renderer adds every editable text box and diagram shape.',
   ].join('\n');
 }
 

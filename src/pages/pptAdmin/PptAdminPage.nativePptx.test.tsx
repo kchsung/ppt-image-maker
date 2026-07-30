@@ -37,6 +37,12 @@ const deckPlan: PptDeckPlan = {
     subtitle: 'Native subtitle',
     labels: ['Label'],
     takeaway: 'Native takeaway',
+    imageSlot: {
+      id: 'visual-1',
+      purpose: 'Support the title with a text-free visual.',
+      placement: 'right-hero',
+      prompt: 'Text-free abstract editorial illustration.',
+    },
     imagePrompt: 'Prompt',
   }],
   copyQa: { status: 'passed', checks: ['Copy passed.'], issues: [] },

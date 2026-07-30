@@ -20,17 +20,17 @@ const steps = [
   {
     id: 'plan',
     title: 'Structuring slides',
-    description: 'Claude is creating and validating the final slide copy before image generation.',
+    description: 'OpenAI is creating and validating the editable slide draft before visual generation.',
   },
   {
     id: 'image',
-    title: 'Generating images',
-    description: 'Creating presentation-ready slide images one slide at a time to avoid function timeouts.',
+    title: 'Generating visual assets',
+    description: 'Creating one text-free visual asset for each slide image slot.',
   },
   {
     id: 'document',
-    title: 'Preparing PPT',
-    description: 'Claude is separating editable text from visual layers and preparing slide-specific PPT layouts.',
+    title: 'Assembling PPT',
+    description: 'PptxGenJS is assembling native editable text, shapes, and visual assets into the final document.',
   },
 ] as const satisfies Array<{ id: StepId; title: string; description: string }>;
 
@@ -301,7 +301,7 @@ function DocumentDetail({ documentEnhancement }: { documentEnhancement: PptDocum
       <EmptyDetail
         icon={<Download className="h-7 w-7 text-text-subtle" />}
         title="PPT output is not ready yet"
-        description="After image generation finishes, Claude prepares editable slide layouts. The Export PPTX button appears on the final output screen."
+        description="After visual asset generation finishes, PptxGenJS assembles the editable PowerPoint file. The Export PPTX button appears on the final output screen."
       />
     );
   }
@@ -311,7 +311,7 @@ function DocumentDetail({ documentEnhancement }: { documentEnhancement: PptDocum
       <p className="text-sm font-bold text-primary">{documentEnhancement.title}</p>
       <p className="mt-1 text-sm text-text-subtle">Output file: {documentEnhancement.fileName}</p>
       <p className="mt-1 text-sm text-text-subtle">
-        Editable layout source: {documentEnhancement.layoutSource === 'claude' ? 'Claude' : 'local fallback'}
+        Editable layout source: {documentEnhancement.layoutSource === 'pptxgenjs' ? 'PptxGenJS' : documentEnhancement.layoutSource === 'claude' ? 'Claude legacy path' : 'local fallback'}
       </p>
       <ul className="mt-3 list-disc space-y-1 pl-5 text-sm text-text-subtle">
         {documentEnhancement.qaChecklist.map((item) => (
