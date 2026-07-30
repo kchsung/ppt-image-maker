@@ -108,6 +108,7 @@ const densityPolicies = {
   standard: { blockCount: 4, koreanMinLength: 14, englishMinLength: 20, description: '4 proof points with enough context to explain the claim, evidence, and implication.' },
   detailed: { blockCount: 5, koreanMinLength: 22, englishMinLength: 32, description: '5 substantial proof points that preserve material context, evidence, implications, and an actionable recommendation.' },
 } as const satisfies Record<ContentDensity, { blockCount: number; koreanMinLength: number; englishMinLength: number; description: string }>;
+const genericTitles = new Set(['overview', 'introduction', 'summary', 'conclusion', '\uac1c\uc694', '\uc18c\uac1c', '\uc694\uc57d', '\uacb0\ub860']);
 
 function getDensityPolicy(contentDensity?: ContentDensity) {
   return densityPolicies[contentDensity ?? 'light'];
@@ -503,8 +504,33 @@ function validatePlan(plan: DraftPlan, request: PptMakerRequest): string[] {
     });
     if (request.targetLanguage === 'English' && slide.title.length > 42) issues.push(`Slide ${slideNumber} title is too long for the editable layout.`);
     if (request.targetLanguage === 'Korean' && [...slide.title].length > 22) issues.push(`Slide ${slideNumber} title is too long for the editable layout.`);
+    if (isGenericTitle(slide.title)) issues.push(`Slide ${slideNumber} needs a decision-oriented title instead of "${slide.title}".`);
   });
+  reportRepeatedSlideCopy(slides, issues);
   return Array.from(new Set(issues));
+}
+
+function isGenericTitle(value: string): boolean {
+  return genericTitles.has(normalizeCopyKey(value));
+}
+
+function reportRepeatedSlideCopy(slides: DraftSlide[], issues: string[]): void {
+  const titles = new Map<string, number>();
+  const messages = new Map<string, number>();
+  slides.forEach((slide) => {
+    const titleKey = normalizeCopyKey(slide.title);
+    const messageKey = normalizeCopyKey(slide.mainMessage);
+    const priorTitlePage = titles.get(titleKey);
+    const priorMessagePage = messages.get(messageKey);
+    if (priorTitlePage) issues.push(`Slides ${priorTitlePage} and ${slide.pageNumber} repeat the same title.`);
+    else if (titleKey) titles.set(titleKey, slide.pageNumber);
+    if (priorMessagePage) issues.push(`Slides ${priorMessagePage} and ${slide.pageNumber} repeat the same main message.`);
+    else if (messageKey) messages.set(messageKey, slide.pageNumber);
+  });
+}
+
+function normalizeCopyKey(value: string): string {
+  return value.toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').replace(/\s+/g, ' ').trim();
 }
 
 function extractResponseText(payload: Record<string, unknown>): string | null {

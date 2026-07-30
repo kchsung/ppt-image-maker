@@ -29,11 +29,12 @@ function validStrategy() {
 }
 
 function validSlide(overrides: Record<string, unknown> = {}) {
+  const pageNumber = typeof overrides.pageNumber === 'number' ? overrides.pageNumber : 1;
   return {
-    pageNumber: 1, archetype: 'cover', visualStructure: 'hero-visual', title: 'Build Trust With Evidence',
+    pageNumber, archetype: 'cover', visualStructure: 'hero-visual', title: `Build Trust With Evidence ${pageNumber}`,
     subtitle: 'A practical workflow for accountable AI decisions.',
     objective: 'Show the decision framework the audience should adopt.',
-    mainMessage: 'Teams move faster when generated work is linked to evidence and reviewed by accountable people.',
+    mainMessage: `Teams move faster when generated work is linked to evidence and reviewed by accountable people at stage ${pageNumber}.`,
     labels: ['Set intent', 'Verify evidence', 'Approve action'], takeaway: 'Use AI to accelerate work while people own the decision.',
     contentBlocks: [
       { heading: 'Set intent', detail: 'State the decision, audience, and acceptable risk before a model creates a draft.' },
@@ -327,6 +328,24 @@ describe('generate-ppt-slide-plan Edge Function', () => {
     const result = await handler!(new Request('http://localhost', { method: 'POST', body: JSON.stringify(requestBody) }));
     expect(result.status).toBe(200);
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('repairs generic and repeated slide claims before returning the plan', async () => {
+    const twoSlideRequest = { request: { ...requestBody.request, slideCount: 2 } };
+    fetchMock.mockResolvedValueOnce(response([
+      validSlide({ title: 'Overview', mainMessage: 'This deck explains the strategic opportunity.' }),
+      validSlide({ pageNumber: 2, title: 'Overview', mainMessage: 'This deck explains the strategic opportunity.' }),
+    ])).mockResolvedValueOnce(response([
+      validSlide({ title: 'Evidence Creates Trust', mainMessage: 'The team needs a source-grounded review workflow before expanding AI use.' }),
+      validSlide({ pageNumber: 2, title: 'Approve The First Workflow', mainMessage: 'A named owner can start the first evidence-backed operating workflow this quarter.' }),
+    ]));
+
+    const result = await handler!(new Request('http://localhost', { method: 'POST', body: JSON.stringify(twoSlideRequest) }));
+    const body = await result.json();
+
+    expect(result.status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(body.slides.map((slide: { title: string }) => slide.title)).toEqual(['Evidence Creates Trust', 'Approve The First Workflow']);
   });
 
   it('requires richer proof points when detailed content is selected', async () => {

@@ -177,6 +177,16 @@ const FORBIDDEN_COPY_PATTERNS = [
 ];
 
 const HANGUL_CHARACTER_PATTERN = /[\u3131-\u318e\uac00-\ud7a3]/u;
+const GENERIC_TITLES = new Set([
+  'overview',
+  'introduction',
+  'summary',
+  'conclusion',
+  '\uac1c\uc694',
+  '\uc18c\uac1c',
+  '\uc694\uc57d',
+  '\uacb0\ub860',
+]);
 
 type CopyQaScope = 'deck' | 'section';
 
@@ -222,6 +232,9 @@ export function getDeckCopyQaIssues(
     if (!slide.objective || !slide.decision) {
       issues.push(`Slide ${slide.pageNumber} is missing a planning objective or recommended decision.`);
     }
+    if (isGenericSlideTitle(slide.title)) {
+      issues.push(`Slide ${slide.pageNumber} needs a decision-oriented title instead of "${slide.title}".`);
+    }
     if (contentBlocks.length < 3) {
       issues.push(`Slide ${slide.pageNumber} needs at least three supporting proof points.`);
     }
@@ -232,6 +245,8 @@ export function getDeckCopyQaIssues(
       issues.push(`Slide ${slide.pageNumber} labels must mirror the supporting proof point headings.`);
     }
   });
+
+  reportRepeatedSlideCopy(deckPlan.slides, issues);
 
   if (scope === 'deck') {
     const structures = deckPlan.slides.map((slide) => slide.visualStructure);
@@ -247,6 +262,41 @@ export function getDeckCopyQaIssues(
   }
 
   return Array.from(new Set(issues));
+}
+
+function isGenericSlideTitle(value: string): boolean {
+  return GENERIC_TITLES.has(normalizeCopyKey(value));
+}
+
+function reportRepeatedSlideCopy(
+  slides: Pick<PptDeckPlan['slides'][number], 'pageNumber' | 'title' | 'mainMessage'>[],
+  issues: string[],
+): void {
+  const titles = new Map<string, number>();
+  const messages = new Map<string, number>();
+
+  slides.forEach((slide) => {
+    const titleKey = normalizeCopyKey(slide.title);
+    const messageKey = normalizeCopyKey(slide.mainMessage);
+    if (titleKey) {
+      const priorPage = titles.get(titleKey);
+      if (priorPage) issues.push(`Slides ${priorPage} and ${slide.pageNumber} repeat the same title.`);
+      else titles.set(titleKey, slide.pageNumber);
+    }
+    if (messageKey) {
+      const priorPage = messages.get(messageKey);
+      if (priorPage) issues.push(`Slides ${priorPage} and ${slide.pageNumber} repeat the same main message.`);
+      else messages.set(messageKey, slide.pageNumber);
+    }
+  });
+}
+
+function normalizeCopyKey(value: string): string {
+  return value
+    .toLocaleLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 export function getDeckAssemblyQaIssues(

@@ -47,4 +47,23 @@ describe('PptHtmlSlide', () => {
     expect(surface?.getAttribute('style')).toContain('--ppt-primary: #4A073F');
     expect(surface?.getAttribute('style')).toContain('--ppt-accent: #FF4D3D');
   });
+
+  it('keeps all five detailed proof points in a hero layout', () => {
+    const detailedSlide: SlidePlan = {
+      ...slide,
+      visualStructure: 'hero-visual',
+      contentBlocks: [
+        { heading: 'First proof', detail: 'The first proof point provides context for the decision.' },
+        { heading: 'Second proof', detail: 'The second proof point explains the relevant evidence.' },
+        { heading: 'Third proof', detail: 'The third proof point establishes the operating implication.' },
+        { heading: 'Fourth proof', detail: 'The fourth proof point identifies the accountable owner.' },
+        { heading: 'Fifth proof', detail: 'The fifth proof point makes the next action explicit.' },
+      ],
+      labels: ['First proof', 'Second proof', 'Third proof', 'Fourth proof', 'Fifth proof'],
+    };
+
+    render(<PptHtmlSlide slide={detailedSlide} />);
+
+    expect(screen.getByText('Fifth proof')).toBeInTheDocument();
+  });
 });

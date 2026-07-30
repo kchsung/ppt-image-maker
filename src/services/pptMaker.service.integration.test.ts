@@ -75,7 +75,7 @@ function createSlide(pageNumber: number, totalSlides: number): SlidePlan {
     title: `Decision Point ${pageNumber}`,
     subtitle: 'A source-grounded view for the accountable operating model.',
     objective: 'Help the audience make a clear and accountable decision from the evidence.',
-    mainMessage: 'Each stage converts available knowledge into a practical decision, owner, and next action.',
+    mainMessage: `Stage ${pageNumber} turns available knowledge into a distinct decision, owner, and next action.`,
     labels: headings,
     contentBlocks: headings.map((heading) => ({
       heading,

@@ -195,4 +195,17 @@ describe('pptMaker utilities', () => {
     expect(issues).toContain('Deck assembly requires page 3 exactly once and in order.');
     expect(issues).toContain('Section "Decision context" does not apply its Blueprint visual direction.');
   });
+
+  it('rejects generic and repeated claims before a deck reaches layout rendering', () => {
+    const deck = createMockDeckPlan({ ...samplePptMakerRequest, slideCount: 4 });
+    const slides = deck.slides.map((slide, index) => index < 2
+      ? { ...slide, title: 'Overview', mainMessage: 'This deck explains the strategic opportunity.' }
+      : slide);
+
+    const issues = getDeckCopyQaIssues({ ...deck, slides });
+
+    expect(issues).toContain('Slide 1 needs a decision-oriented title instead of "Overview".');
+    expect(issues).toContain('Slides 1 and 2 repeat the same title.');
+    expect(issues).toContain('Slides 1 and 2 repeat the same main message.');
+  });
 });
