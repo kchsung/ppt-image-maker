@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Check, ChevronLeft, ChevronRight, ImageUp, Sparkles, X } from 'lucide-react';
+import { Check, ChevronLeft, ChevronRight, FileText, FileUp, ImageUp, LoaderCircle, Sparkles, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/cn';
 import type { PptMakerFormState, PptTemplate, StyleSourceMode, TargetLanguage } from '@/types/models/pptMaker.model';
+import { extractSourceDocument } from '@/utils/sourceDocument';
 
 interface PptMakerFormProps {
   form: PptMakerFormState;
@@ -22,6 +23,8 @@ export function PptMakerForm({ form, templates, isLoading, onChange, onTemplateS
     return index >= 0 ? index : 0;
   }, [form.selectedTemplateId, templates]);
   const [activeTemplateIndex, setActiveTemplateIndex] = useState(selectedTemplateIndex);
+  const [sourceFileError, setSourceFileError] = useState<string | null>(null);
+  const [isExtractingSource, setIsExtractingSource] = useState(false);
   const activeTemplate = templates[activeTemplateIndex] ?? templates[0];
   const isActiveTemplateSelected = activeTemplate ? form.selectedTemplateId === activeTemplate.id : false;
   const hasStyleReference =
@@ -44,6 +47,23 @@ export function PptMakerForm({ form, templates, isLoading, onChange, onTemplateS
       }
     };
     reader.readAsDataURL(file);
+  };
+
+  const handleSourceDocumentChange = async (file: File | undefined) => {
+    if (!file) {
+      return;
+    }
+
+    setIsExtractingSource(true);
+    setSourceFileError(null);
+    try {
+      const extracted = await extractSourceDocument(file);
+      onChange({ sourceText: extracted.text, sourceDocument: extracted.document });
+    } catch (error) {
+      setSourceFileError(error instanceof Error ? error.message : 'Could not read the selected document.');
+    } finally {
+      setIsExtractingSource(false);
+    }
   };
 
   const handleLogoChange = (file: File | undefined) => {
@@ -81,15 +101,49 @@ export function PptMakerForm({ form, templates, isLoading, onChange, onTemplateS
         </p>
       </CardHeader>
       <CardContent className="space-y-4">
-        <label className="block">
-          <span className="mb-1 block text-sm font-semibold text-text-main">Source text</span>
+        <div className="space-y-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="block text-sm font-semibold text-text-main">Source</span>
+            <label className="inline-flex cursor-pointer items-center gap-2 rounded-md border border-border bg-surface px-3 py-2 text-sm font-semibold text-text-subtle transition hover:border-primary hover:text-primary">
+              {isExtractingSource ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <FileUp className="h-4 w-4" />}
+              {isExtractingSource ? 'Reading document...' : 'Upload DOCX, PDF, or PPTX'}
+              <input
+                aria-label="Source document"
+                className="sr-only"
+                type="file"
+                accept=".docx,.pdf,.pptx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.presentationml.presentation"
+                disabled={isExtractingSource}
+                onChange={(event) => {
+                  void handleSourceDocumentChange(event.target.files?.[0]);
+                  event.currentTarget.value = '';
+                }}
+              />
+            </label>
+          </div>
           <Textarea
             aria-label="Source text"
             value={form.sourceText}
-            placeholder="Paste source material here..."
+            placeholder="Paste source material or upload a DOCX, PDF, or PPTX file..."
             onChange={(event) => onChange({ sourceText: event.target.value })}
           />
-        </label>
+          {form.sourceDocument ? (
+            <div className="flex items-center gap-2 rounded-md border border-border bg-surface-muted px-3 py-2 text-sm text-text-subtle">
+              <FileText className="h-4 w-4 text-primary" />
+              <span className="min-w-0 flex-1 truncate">{form.sourceDocument.name}</span>
+              <span className="shrink-0 text-xs">{form.sourceDocument.extractedCharacterCount.toLocaleString()} characters extracted</span>
+              <Button
+                type="button"
+                variant="ghost"
+                className="h-7 w-7 px-0"
+                onClick={() => onChange({ sourceDocument: null })}
+                aria-label="Remove source document"
+              >
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+          ) : null}
+          {sourceFileError ? <p className="text-sm font-medium text-accent">{sourceFileError}</p> : null}
+        </div>
 
         <div className="grid gap-4 sm:grid-cols-2">
           <label className="block">
@@ -131,6 +185,17 @@ export function PptMakerForm({ form, templates, isLoading, onChange, onTemplateS
             />
           </label>
         </div>
+
+        <label className="block">
+          <span className="mb-1 block text-sm font-semibold text-text-main">Creation instructions</span>
+          <Textarea
+            aria-label="Creation instructions"
+            className="min-h-24"
+            value={form.creationInstructions}
+            placeholder="Add constraints for the deck: key messages to emphasize, required sections, tone, exclusions, or preferred storytelling flow."
+            onChange={(event) => onChange({ creationInstructions: event.target.value })}
+          />
+        </label>
 
         <label className="block">
           <span className="mb-1 block text-sm font-semibold text-text-main">Style reference notes</span>

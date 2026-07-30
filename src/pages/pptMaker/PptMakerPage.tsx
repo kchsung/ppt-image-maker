@@ -107,7 +107,7 @@ export function PptMakerPage() {
       <PageHeader
         eyebrow="QLEARN Startup"
         title="PPT Image Deck Maker"
-        description="Choose a numbered template or upload a sample slide style, then paste source text. QLEARN will draft editable slides, generate visual assets, and assemble a PPTX output."
+        description="Choose a template or upload a sample slide style, then add source text or a DOCX, PDF, or PPTX file. QLEARN will draft editable slides, generate visual assets, and assemble a PPTX output."
         actions={
           <Button
             variant="secondary"

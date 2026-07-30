@@ -26,6 +26,8 @@ interface PptMakerState {
 const initialState: PptMakerState = {
   form: {
     sourceText: '',
+    sourceDocument: null,
+    creationInstructions: '',
     targetLanguage: 'English',
     audience: 'university students',
     purpose: 'summer school lecture',
@@ -45,7 +47,7 @@ const initialState: PptMakerState = {
   error: null,
 };
 
-function toRequest(form: PptMakerFormState): PptMakerRequest {
+export function toPptMakerRequest(form: PptMakerFormState): PptMakerRequest {
   const selectedTemplate = form.selectedTemplateId
     ? pptTemplates.find((template) => template.id === form.selectedTemplateId)
     : undefined;
@@ -53,6 +55,8 @@ function toRequest(form: PptMakerFormState): PptMakerRequest {
 
   return {
     sourceText: form.sourceText,
+    sourceDocument: form.sourceDocument ?? undefined,
+    creationInstructions: form.creationInstructions.trim() || undefined,
     targetLanguage: form.targetLanguage,
     audience: form.audience,
     purpose: form.purpose,
@@ -71,7 +75,7 @@ function toRequest(form: PptMakerFormState): PptMakerRequest {
 }
 
 export const generateDeckPlan = createAsyncThunk('pptMaker/generateDeckPlan', async (form: PptMakerFormState) => {
-  return pptMakerService.generateDeckPlan(toRequest(form));
+  return pptMakerService.generateDeckPlan(toPptMakerRequest(form));
 });
 
 export const generateSlideImages = createAsyncThunk(

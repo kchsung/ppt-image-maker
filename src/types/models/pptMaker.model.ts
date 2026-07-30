@@ -49,6 +49,14 @@ export interface StyleReference {
 
 export type StyleSourceMode = 'template' | 'upload';
 
+export type SourceDocumentType = 'docx' | 'pdf' | 'pptx';
+
+export interface SourceDocument {
+  name: string;
+  type: SourceDocumentType;
+  extractedCharacterCount: number;
+}
+
 export interface PptTemplate {
   id: string;
   templateNumber: number;
@@ -62,6 +70,8 @@ export interface PptTemplate {
 
 export interface PptMakerRequest {
   sourceText: string;
+  sourceDocument?: SourceDocument;
+  creationInstructions?: string;
   targetLanguage: TargetLanguage;
   audience: string;
   purpose: string;
@@ -212,6 +222,8 @@ export interface PptEditableSlideLayout {
 
 export interface PptMakerFormState {
   sourceText: string;
+  sourceDocument: SourceDocument | null;
+  creationInstructions: string;
   targetLanguage: TargetLanguage;
   audience: string;
   purpose: string;

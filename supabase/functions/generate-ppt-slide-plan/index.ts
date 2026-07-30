@@ -17,6 +17,8 @@ type SlideImagePlacement = 'right-hero' | 'left-hero' | 'center-visual' | 'card-
 
 type PptMakerRequest = {
   sourceText: string;
+  sourceDocument?: { name: string; type: 'docx' | 'pdf' | 'pptx'; extractedCharacterCount: number };
+  creationInstructions?: string;
   targetLanguage: TargetLanguage;
   audience: string;
   purpose: string;
@@ -107,6 +109,8 @@ async function requestPlan(
     targetLanguage: request.targetLanguage,
     audience: request.audience,
     purpose: request.purpose,
+    sourceDocument: request.sourceDocument,
+    creationInstructions: request.creationInstructions ?? 'No additional instructions were provided.',
     styleReference: request.styleReference,
     sourceText: request.sourceText,
     previousSlides: priorSlides,
@@ -120,6 +124,7 @@ async function requestPlan(
       'Titles must fit editable PowerPoint title boxes: 42 characters maximum in English or 22 characters maximum in Korean.',
       'imageSlot describes ONE visual-only image asset. Its prompt must request an illustration, photo, icon system, or diagram WITHOUT any readable words, numbers, labels, logo, title, footer, slide frame, or full-slide composition.',
       'The native PPTX renderer will place the image only inside imageSlot.placement and draw all text, cards, arrows, metrics, and labels as editable PowerPoint objects.',
+      'Treat creationInstructions as mandatory constraints unless they conflict with the requested language, source facts, or safety requirements.',
     ],
   });
   const response = await fetch('https://api.openai.com/v1/responses', {
