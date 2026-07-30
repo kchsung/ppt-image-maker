@@ -87,6 +87,22 @@ describe('generate-ppt-slide-plan Edge Function', () => {
     ]);
   });
 
+  it('allows standard uppercase abbreviations in Korean slide copy', async () => {
+    const koreanRequest = {
+      request: { ...requestBody.request, targetLanguage: 'Korean' as const },
+    };
+    fetchMock.mockResolvedValue(response([validSlide({
+      title: 'R&D 계획서',
+      subtitle: 'R&D 계획서',
+      mainMessage: 'R&D 계획서',
+      labels: ['R&D 계획서', 'R&D 계획서', 'R&D 계획서'],
+      takeaway: 'R&D 계획서',
+    })]));
+
+    const result = await handler!(new Request('http://localhost', { method: 'POST', body: JSON.stringify(koreanRequest) }));
+    expect(result.status).toBe(200);
+  });
+
   it('rejects an image prompt that asks OpenAI to render slide text', async () => {
     fetchMock.mockResolvedValueOnce(response([validSlide({ imageSlot: { id: 'visual-1', purpose: 'Bad', placement: 'right-hero', prompt: 'Render the title and labels on a full slide.' } })]))
       .mockResolvedValueOnce(response([validSlide({ imageSlot: { id: 'visual-1', purpose: 'Bad', placement: 'right-hero', prompt: 'Render the title and labels on a full slide.' } })]));

@@ -100,4 +100,30 @@ describe('pptMaker utilities', () => {
 
     expect(issues).toEqual([]);
   });
+
+  it('allows standard uppercase abbreviations such as R&D in Korean decks', () => {
+    const issues = getDeckCopyQaIssues({
+      request: { ...samplePptMakerRequest, targetLanguage: 'Korean' },
+      slides: [{
+        id: 'slide-1',
+        pageNumber: 1,
+        archetype: 'cover',
+        visualStructure: 'hero-visual',
+        title: 'R&D 계획서',
+        subtitle: 'R&D 계획서',
+        mainMessage: 'R&D 계획서',
+        labels: ['R&D 계획서', 'R&D 계획서', 'R&D 계획서'],
+        takeaway: 'R&D 계획서',
+        imageSlot: {
+          id: 'visual-1',
+          purpose: 'Support the title with a text-free visual.',
+          placement: 'right-hero',
+          prompt: 'Text-free abstract editorial illustration.',
+        },
+        imagePrompt: '',
+      }],
+    });
+
+    expect(issues).toEqual([]);
+  });
 });

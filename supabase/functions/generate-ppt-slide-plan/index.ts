@@ -117,7 +117,7 @@ async function requestPlan(
     qaIssuesToFix: qaIssues,
     rules: [
       'The returned text fields are the sole source for editable PowerPoint text. Do not rely on text embedded in images.',
-      'Use exactly the target language. English slides must contain no Hangul. Korean slides may use only proper names plus AI, PPT, CEO, CTO, and the brand name QLEARN for Startup in English.',
+      'Use exactly the target language. English slides must contain no Hangul. Korean slides may use Korean text plus proper names, QLEARN for Startup, and standard uppercase business or technical abbreviations such as AI, R&D, API, KPI, OKR, ROI, LLM, GPT, B2B, and B2C. Do not write ordinary English sentences on Korean slides.',
       'Every slide needs a different information composition where the message calls for it. Never repeat a visualStructure on consecutive slides.',
       'Use hero-visual for the cover and closing-commitment for the final slide. Use at least four distinct visual structures in a deck of four or more slides.',
       'Write concise, complete, factual copy. No ellipses, page markers, template labels, source headers, lorem ipsum, or invented citations.',
@@ -294,6 +294,7 @@ function validatePlan(slides: DraftSlide[], request: PptMakerRequest): string[] 
       if (!value) issues.push(`Slide ${slideNumber} has an empty text field.`);
       if (/\.{2,}|\[[^\]]*(?:page|\uD398\uC774\uC9C0)[^\]]*\]|\b(?:Designed for|Moves From|Slide Title|Key Point|Lorem ipsum)\b/iu.test(value)) issues.push(`Slide ${slideNumber} contains placeholder or clipped text.`);
       if (request.targetLanguage === 'English' && hangul.test(value)) issues.push(`Slide ${slideNumber} contains Korean text despite English being selected.`);
+      if (request.targetLanguage === 'Korean' && hasUnapprovedLatinCopy(value)) issues.push(`Slide ${slideNumber} contains unapproved English copy: "${value}".`);
     });
     if (request.targetLanguage === 'English' && slide.title.length > 42) issues.push(`Slide ${slideNumber} title is too long for the editable layout.`);
     if (request.targetLanguage === 'Korean' && [...slide.title].length > 22) issues.push(`Slide ${slideNumber} title is too long for the editable layout.`);
@@ -320,6 +321,17 @@ function isValidRequest(value: unknown): value is PptMakerRequest {
     typeof value.slideCount === 'number' && value.slideCount >= 1 && value.slideCount <= 20 && isRecord(value.styleReference);
 }
 function isRecord(value: unknown): value is Record<string, unknown> { return typeof value === 'object' && value !== null; }
+function hasUnapprovedLatinCopy(value: string): boolean {
+  const withoutApprovedBrandNames = value
+    .replace(/\bQLEARN\s+for\s+Startup\b/giu, 'QLEARN')
+    .replace(/\bQLEARN\s+Startup\b/giu, 'QLEARN');
+  const tokens = withoutApprovedBrandNames.match(/[A-Za-z][A-Za-z0-9]*(?:[&+./-][A-Za-z0-9]+)*/g) ?? [];
+  return tokens.some((token) => {
+    if (['AI', 'QLEARN', 'PPT', 'CTO', 'CEO', 'SaaS', 'PoC'].includes(token)) return false;
+    const uppercaseAbbreviation = /^[A-Z][A-Z0-9]*(?:[&+./-][A-Z0-9]+)*$/u;
+    return !(uppercaseAbbreviation.test(token) && token.replace(/[^A-Z0-9]/gu, '').length >= 2);
+  });
+}
 function text(value: unknown): string { return typeof value === 'string' ? value.trim() : ''; }
 function positive(value: unknown, fallback: number): number { return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : fallback; }
 function json(data: unknown, status = 200): Response { return new Response(JSON.stringify(data), { status, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }); }
