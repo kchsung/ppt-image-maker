@@ -219,7 +219,10 @@ export function getDeckCopyQaIssues(deckPlan: Pick<PptDeckPlan, 'request' | 'sli
 }
 
 function hasUnapprovedLatinCopy(value: string): boolean {
-  const tokens = value.match(/[A-Za-z][A-Za-z-]*/g) ?? [];
+  const withoutApprovedBrandNames = value
+    .replace(/\bQLEARN\s+for\s+Startup\b/giu, 'QLEARN')
+    .replace(/\bQLEARN\s+Startup\b/giu, 'QLEARN');
+  const tokens = withoutApprovedBrandNames.match(/[A-Za-z][A-Za-z-]*/g) ?? [];
   return tokens.some((token) => !['AI', 'QLEARN', 'PPT', 'CTO', 'CEO'].includes(token));
 }
 

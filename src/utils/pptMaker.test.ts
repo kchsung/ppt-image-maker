@@ -74,4 +74,30 @@ describe('pptMaker utilities', () => {
     expect(issues).toHaveLength(1);
     expect(issues[0]).toContain('contains Korean copy while English was requested');
   });
+
+  it('allows the QLEARN for Startup brand name in Korean decks', () => {
+    const issues = getDeckCopyQaIssues({
+      request: { ...samplePptMakerRequest, targetLanguage: 'Korean' },
+      slides: [{
+        id: 'slide-1',
+        pageNumber: 1,
+        archetype: 'cover',
+        visualStructure: 'hero-visual',
+        title: 'QLEARN for Startup',
+        subtitle: 'QLEARN for Startup',
+        mainMessage: 'QLEARN for Startup',
+        labels: ['QLEARN for Startup', 'QLEARN for Startup', 'QLEARN for Startup'],
+        takeaway: 'QLEARN for Startup',
+        imageSlot: {
+          id: 'visual-1',
+          purpose: 'Support the title with a text-free visual.',
+          placement: 'right-hero',
+          prompt: 'Text-free abstract editorial illustration.',
+        },
+        imagePrompt: '',
+      }],
+    });
+
+    expect(issues).toEqual([]);
+  });
 });

@@ -117,7 +117,7 @@ async function requestPlan(
     qaIssuesToFix: qaIssues,
     rules: [
       'The returned text fields are the sole source for editable PowerPoint text. Do not rely on text embedded in images.',
-      'Use exactly the target language. English slides must contain no Hangul. Korean slides may use only proper names plus AI, PPT, CEO, CTO in English.',
+      'Use exactly the target language. English slides must contain no Hangul. Korean slides may use only proper names plus AI, PPT, CEO, CTO, and the brand name QLEARN for Startup in English.',
       'Every slide needs a different information composition where the message calls for it. Never repeat a visualStructure on consecutive slides.',
       'Use hero-visual for the cover and closing-commitment for the final slide. Use at least four distinct visual structures in a deck of four or more slides.',
       'Write concise, complete, factual copy. No ellipses, page markers, template labels, source headers, lorem ipsum, or invented citations.',
