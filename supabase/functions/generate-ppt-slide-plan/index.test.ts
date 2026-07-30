@@ -57,6 +57,36 @@ describe('generate-ppt-slide-plan Edge Function', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it('normalizes a repeated visual structure into a diverse slide sequence', async () => {
+    const variedRequest = {
+      request: { ...requestBody.request, slideCount: 4 },
+    };
+    const repeatedStructureSlides = Array.from({ length: 4 }, (_, index) => validSlide({
+      pageNumber: index + 1,
+      visualStructure: 'card-grid',
+      archetype: 'card-grid',
+      title: `Decision ${index + 1}`,
+      imageSlot: {
+        id: `visual-${index + 1}`,
+        purpose: 'A visual supporting the decision.',
+        placement: 'card-visual',
+        prompt: 'Text-free editorial illustration of connected evidence and review signals.',
+      },
+    }));
+    fetchMock.mockResolvedValue(response(repeatedStructureSlides));
+
+    const result = await handler!(new Request('http://localhost', { method: 'POST', body: JSON.stringify(variedRequest) }));
+    const body = await result.json();
+
+    expect(result.status).toBe(200);
+    expect(body.slides.map((slide: { visualStructure: string }) => slide.visualStructure)).toEqual([
+      'hero-visual',
+      'message-emphasis',
+      'card-grid',
+      'closing-commitment',
+    ]);
+  });
+
   it('rejects an image prompt that asks OpenAI to render slide text', async () => {
     fetchMock.mockResolvedValueOnce(response([validSlide({ imageSlot: { id: 'visual-1', purpose: 'Bad', placement: 'right-hero', prompt: 'Render the title and labels on a full slide.' } })]))
       .mockResolvedValueOnce(response([validSlide({ imageSlot: { id: 'visual-1', purpose: 'Bad', placement: 'right-hero', prompt: 'Render the title and labels on a full slide.' } })]));

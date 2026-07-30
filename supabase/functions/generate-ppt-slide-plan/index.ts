@@ -64,10 +64,10 @@ Deno.serve(async (req) => {
     if (!apiKey) return json({ error: 'OPENAI_API_KEY is not configured.' }, 500);
 
     const model = Deno.env.get('OPENAI_PPT_PLAN_MODEL') ?? 'gpt-4o';
-    let slides = await requestPlan(apiKey, model, request);
+    let slides = ensurePlanDiversity(await requestPlan(apiKey, model, request));
     let issues = validatePlan(slides, request);
     if (issues.length > 0) {
-      slides = await requestPlan(apiKey, model, request, slides, issues);
+      slides = ensurePlanDiversity(await requestPlan(apiKey, model, request, slides, issues));
       issues = validatePlan(slides, request);
     }
     if (issues.length > 0) return json({ error: `Slide copy QA failed: ${issues[0]}`, issues }, 422);
@@ -195,6 +195,85 @@ function normalizeSlide(value: unknown, fallbackPageNumber: number): DraftSlide 
       prompt: text(image.prompt),
     },
   };
+}
+
+function ensurePlanDiversity(slides: DraftSlide[]): DraftSlide[] {
+  const totalSlides = slides.length;
+
+  return slides.map((slide, index) => {
+    const visualStructure = getRequiredVisualStructure(index, totalSlides);
+    const archetype = getArchetypeForStructure(visualStructure, totalSlides, index);
+    const placement = getPlacementForStructure(visualStructure);
+    const structureInstruction = `Use a ${visualStructure} composition with illustration-only content and no typography.`;
+
+    return {
+      ...slide,
+      pageNumber: index + 1,
+      archetype,
+      visualStructure,
+      imageSlot: {
+        ...slide.imageSlot,
+        placement,
+        prompt: `${slide.imageSlot.prompt} ${structureInstruction}`.trim(),
+      },
+    };
+  });
+}
+
+function getRequiredVisualStructure(index: number, totalSlides: number): SlideVisualStructure {
+  if (index === 0) return 'hero-visual';
+  if (totalSlides > 1 && index === totalSlides - 1) return 'closing-commitment';
+
+  const middleStructures: SlideVisualStructure[] = [
+    'message-emphasis',
+    'card-grid',
+    'side-by-side-comparison',
+    'numbered-process',
+    'hub-and-spoke',
+    'metrics-dashboard',
+    'roadmap',
+    'pyramid-framework',
+    'case-story',
+    'before-after-mapping',
+  ];
+  return middleStructures[(index - 1) % middleStructures.length];
+}
+
+function getArchetypeForStructure(
+  visualStructure: SlideVisualStructure,
+  totalSlides: number,
+  index: number,
+): SlideArchetype {
+  if (index === 0) return 'cover';
+  if (totalSlides > 1 && index === totalSlides - 1) return 'closing';
+
+  const archetypeByStructure: Partial<Record<SlideVisualStructure, SlideArchetype>> = {
+    'message-emphasis': 'section-opener',
+    'card-grid': 'card-grid',
+    'side-by-side-comparison': 'comparison',
+    'numbered-process': 'process',
+    'before-after-mapping': 'before-after',
+    'metrics-dashboard': 'case-dashboard',
+  };
+  return archetypeByStructure[visualStructure] ?? 'card-grid';
+}
+
+function getPlacementForStructure(visualStructure: SlideVisualStructure): SlideImagePlacement {
+  const placementByStructure: Record<SlideVisualStructure, SlideImagePlacement> = {
+    'hero-visual': 'right-hero',
+    'message-emphasis': 'center-visual',
+    'card-grid': 'card-visual',
+    'side-by-side-comparison': 'right-hero',
+    'numbered-process': 'center-visual',
+    'before-after-mapping': 'center-visual',
+    'hub-and-spoke': 'hub-visual',
+    'metrics-dashboard': 'card-visual',
+    roadmap: 'center-visual',
+    'pyramid-framework': 'center-visual',
+    'case-story': 'left-hero',
+    'closing-commitment': 'center-visual',
+  };
+  return placementByStructure[visualStructure];
 }
 
 function validatePlan(slides: DraftSlide[], request: PptMakerRequest): string[] {
