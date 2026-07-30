@@ -37,25 +37,26 @@ Deno.serve(async (req) => {
   }
 
   try {
-    const body = (await req.json()) as { deckPlan?: PptDeckPlan };
+    const body = (await req.json()) as { deckPlan?: PptDeckPlan; layoutOnly?: boolean };
     const deckPlan = body.deckPlan;
 
     if (!deckPlan || !Array.isArray(deckPlan.slides) || deckPlan.slides.length === 0) {
       return json({ error: 'deckPlan with slides is required.' }, 400);
     }
 
-    logJobEvent('job.create.requested', { deckPlanId: deckPlan.id, slideCount: deckPlan.slides.length });
+    const layoutOnly = body.layoutOnly === true;
+    logJobEvent('job.create.requested', { deckPlanId: deckPlan.id, slideCount: deckPlan.slides.length, layoutOnly: String(layoutOnly) });
 
     const supabase = createAdminClient();
     const { data: job, error: jobError } = await supabase
       .from('generation_jobs')
       .insert({
         type: 'ppt_image_deck',
-        status: 'pending',
-        progress: 0,
-        total_items: deckPlan.slides.length,
-        completed_items: 0,
-        request: { deckPlan },
+        status: layoutOnly ? 'succeeded' : 'pending',
+        progress: layoutOnly ? 100 : 0,
+        total_items: layoutOnly ? 0 : deckPlan.slides.length,
+        completed_items: layoutOnly ? 0 : 0,
+        request: { deckPlan, generationMode: layoutOnly ? 'layout-only' : 'legacy-image-deck' },
       })
       .select('id, status, total_items, completed_items')
       .single();
@@ -64,6 +65,19 @@ Deno.serve(async (req) => {
       throw jobError ?? new Error('Failed to create generation job.');
     }
     logJobEvent('job.create.persisted', { jobId: job.id, totalItems: job.total_items });
+
+    if (layoutOnly) {
+      return json(
+        {
+          id: job.id,
+          status: job.status,
+          totalItems: job.total_items,
+          completedItems: job.completed_items,
+          items: [],
+        },
+        201,
+      );
+    }
 
     const itemRows = deckPlan.slides.map((slide) => ({
       job_id: job.id,

@@ -5,7 +5,15 @@ import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/cn';
-import type { PptMakerFormState, PptTemplate, StyleSourceMode, TargetLanguage } from '@/types/models/pptMaker.model';
+import { getPresentationDesignGuide } from '@/mocks/presentationGuides.mock';
+import type {
+  ContentDensity,
+  PresentationIntent,
+  PptMakerFormState,
+  PptTemplate,
+  StyleSourceMode,
+  TargetLanguage,
+} from '@/types/models/pptMaker.model';
 import { extractSourceDocument } from '@/utils/sourceDocument';
 
 interface PptMakerFormProps {
@@ -26,6 +34,7 @@ export function PptMakerForm({ form, templates, isLoading, onChange, onTemplateS
   const [sourceFileError, setSourceFileError] = useState<string | null>(null);
   const [isExtractingSource, setIsExtractingSource] = useState(false);
   const activeTemplate = templates[activeTemplateIndex] ?? templates[0];
+  const presentationGuide = getPresentationDesignGuide(form.presentationIntent);
   const isActiveTemplateSelected = activeTemplate ? form.selectedTemplateId === activeTemplate.id : false;
   const hasStyleReference =
     form.styleSourceMode === 'template' ? Boolean(form.selectedTemplateId) : Boolean(form.styleImageDataUrl);
@@ -164,6 +173,20 @@ export function PptMakerForm({ form, templates, isLoading, onChange, onTemplateS
 
         <div className="grid gap-4 sm:grid-cols-2">
           <label className="block">
+            <span className="mb-1 block text-sm font-semibold text-text-main">Presentation format</span>
+            <select
+              className="h-10 w-full rounded-md border border-border bg-surface px-3 text-sm outline-none focus:border-primary"
+              value={form.presentationIntent ?? 'education-lecture'}
+              onChange={(event) => onChange({ presentationIntent: event.target.value as PresentationIntent })}
+            >
+              <option value="executive-proposal">B2B executive proposal</option>
+              <option value="strategy-decision">Strategy decision deck</option>
+              <option value="education-lecture">Education lecture</option>
+              <option value="investment-deck">Investment or IR deck</option>
+              <option value="implementation-roadmap">Implementation roadmap</option>
+            </select>
+          </label>
+          <label className="block">
             <span className="mb-1 block text-sm font-semibold text-text-main">Language</span>
             <select
               className="h-10 w-full rounded-md border border-border bg-surface px-3 text-sm outline-none focus:border-primary"
@@ -178,21 +201,67 @@ export function PptMakerForm({ form, templates, isLoading, onChange, onTemplateS
             <span className="mb-1 block text-sm font-semibold text-text-main">Slide count</span>
             <Input
               min={2}
-              max={20}
+              max={100}
               type="number"
               value={form.slideCount}
               onChange={(event) => onChange({ slideCount: Number(event.target.value) })}
             />
           </label>
+          <label className="block">
+            <span className="mb-1 block text-sm font-semibold text-text-main">Content detail</span>
+            <select
+              className="h-10 w-full rounded-md border border-border bg-surface px-3 text-sm outline-none focus:border-primary"
+              value={form.contentDensity}
+              onChange={(event) => onChange({ contentDensity: event.target.value as ContentDensity })}
+            >
+              <option value="light">조금</option>
+              <option value="standard">중간</option>
+              <option value="detailed">많음</option>
+            </select>
+          </label>
         </div>
 
         <label className="block">
-          <span className="mb-1 block text-sm font-semibold text-text-main">Creation instructions</span>
+          <span className="mb-1 block text-sm font-semibold text-text-main">Core message</span>
+          <Input
+            value={form.coreMessage ?? ''}
+            placeholder="The single conclusion the audience should remember and act on."
+            onChange={(event) => onChange({ coreMessage: event.target.value })}
+          />
+        </label>
+
+        <label className="block">
+          <span className="mb-1 block text-sm font-semibold text-text-main">Required sections</span>
+          <Textarea
+            aria-label="Required sections"
+            className="min-h-20"
+            value={form.requiredSections ?? ''}
+            placeholder="For example: current challenge, operating model, proof points, rollout roadmap, expected outcomes."
+            onChange={(event) => onChange({ requiredSections: event.target.value })}
+          />
+        </label>
+
+        <div className="rounded-md border border-primary/20 bg-surface-muted p-4">
+          <p className="text-xs font-bold uppercase tracking-wide text-accent">Default planning and design guide</p>
+          <h3 className="mt-1 text-base font-bold text-primary">{presentationGuide.name}</h3>
+          <p className="mt-2 text-sm leading-6 text-text-main">{presentationGuide.narrativeGuide}</p>
+          <p className="mt-2 text-sm leading-6 text-text-subtle">{presentationGuide.visualGuide}</p>
+          <ul className="mt-3 grid gap-2 text-sm text-text-subtle sm:grid-cols-3">
+            {presentationGuide.slideRules.map((rule) => (
+              <li key={rule} className="rounded-md border border-border bg-surface px-3 py-2">
+                {rule}
+              </li>
+            ))}
+          </ul>
+        </div>
+
+        <label className="block">
+          <span className="mb-1 block text-sm font-semibold text-text-main">Additional instructions</span>
           <Textarea
             aria-label="Creation instructions"
             className="min-h-24"
             value={form.creationInstructions}
-            placeholder="Add constraints for the deck: key messages to emphasize, required sections, tone, exclusions, or preferred storytelling flow."
+            placeholder="Add constraints for evidence, tone, exclusions, mandatory data points, or a preferred storytelling flow."
             onChange={(event) => onChange({ creationInstructions: event.target.value })}
           />
         </label>
@@ -359,7 +428,7 @@ export function PptMakerForm({ form, templates, isLoading, onChange, onTemplateS
                   />
                   <div className="min-w-0 flex-1">
                     <p className="text-sm font-semibold text-text-main">Reference image loaded</p>
-                    <p className="text-xs text-text-subtle">Used by the OpenAI image generation Edge Function.</p>
+                    <p className="text-xs text-text-subtle">Used as a visual reference for the Slide JSON layout system.</p>
                   </div>
                   <Button
                     variant="ghost"
@@ -388,7 +457,7 @@ export function PptMakerForm({ form, templates, isLoading, onChange, onTemplateS
 
         <Button className="w-full sm:w-auto" disabled={!canSubmit} onClick={onSubmit}>
           <Sparkles className="h-4 w-4" />
-          {isLoading ? 'Generating...' : 'Generate PPT images'}
+          {isLoading ? 'Planning deck...' : 'Create PPT deck'}
         </Button>
       </CardContent>
     </Card>

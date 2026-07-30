@@ -1,146 +1,103 @@
 import type { PptExportService } from '@/interfaces/pptMaker.interface';
-import { createFallbackLayout } from '@/services/pptDocument.service';
 import type {
-  GeneratedImageDeck,
-  GeneratedSlideImage,
   PptDeckPlan,
   PptDocumentEnhancement,
   PptEditableShape,
-  PptEditableSlideLayout,
   PptEditableTextBlock,
-  SlidePlan,
 } from '@/types/models/pptMaker.model';
 import { stripEllipsis } from '@/utils/pptMaker';
 import type PptxGenJS from 'pptxgenjs';
 
-const SLIDE_W = 13.333;
-const SLIDE_H = 7.5;
+const MIME_TYPE = 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
 const FONT_FACE = 'Pretendard';
 const WHITE = 'FFFFFF';
 const NAVY = '0B2454';
-const BORDER = 'E5EAF2';
+const BORDER = 'D8E1EF';
 
 type PptxSlide = ReturnType<PptxGenJS['addSlide']>;
 type PptxPresentation = PptxGenJS;
 
 export const pptExportService: PptExportService = {
-  async exportImageDeck(
-    deck,
-    deckPlan = null,
-    fileName = 'qlearn-editable-deck.pptx',
-    enhancement,
-  ) {
-    const pptx = await buildPresentation(deck, deckPlan, fileName, enhancement);
-    await pptx.writeFile({ fileName: enhancement?.fileName ?? fileName });
+  async exportDeck(deckPlan, enhancement, slideElements) {
+    const blob = await createPresentationBlob(deckPlan, enhancement, slideElements);
+    downloadBlob(blob, enhancement.fileName);
   },
 
-  async createImageDeckBlob(deck, deckPlan = null, enhancement) {
-    const pptx = await buildPresentation(deck, deckPlan, enhancement?.fileName ?? 'qlearn-editable-deck.pptx', enhancement);
-    const output = await pptx.write({ outputType: 'blob' });
-    if (output instanceof Blob) return output;
-
-    const blobType = 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
-    if (typeof output === 'string') return new Blob([output], { type: blobType });
-    if (output instanceof ArrayBuffer) return new Blob([output], { type: blobType });
-    return new Blob([new Uint8Array(output).slice().buffer], { type: blobType });
+  async createDeckBlob(deckPlan, enhancement, slideElements = []) {
+    return createPresentationBlob(deckPlan, enhancement, slideElements);
   },
 };
 
-async function buildPresentation(
-  deck: GeneratedImageDeck,
-  deckPlan: PptDeckPlan | null,
-  fileName: string,
-  enhancement?: PptDocumentEnhancement,
-): Promise<PptxPresentation> {
+async function createPresentationBlob(
+  deckPlan: PptDeckPlan,
+  enhancement: PptDocumentEnhancement,
+  slideElements: HTMLElement[] = [],
+): Promise<Blob> {
+    if (slideElements.length > 0) {
+      try {
+        return await createDomPptxBlob(slideElements, enhancement.fileName);
+      } catch (error) {
+        console.warn('dom-to-pptx export failed; using PptxGenJS fallback.', error);
+      }
+    }
+
+    return createPptxGenFallbackBlob(deckPlan, enhancement);
+}
+
+async function createDomPptxBlob(slideElements: HTMLElement[], fileName: string): Promise<Blob> {
+  const { exportToPptx } = await import('dom-to-pptx');
+  const result = await exportToPptx(slideElements, {
+    fileName,
+    skipDownload: true,
+    autoEmbedFonts: false,
+    svgAsVector: true,
+    layout: 'LAYOUT_WIDE',
+  });
+
+  if (!(result instanceof Blob) || result.size === 0) {
+    throw new Error('dom-to-pptx returned no PPTX file.');
+  }
+  return result;
+}
+
+async function createPptxGenFallbackBlob(
+  deckPlan: PptDeckPlan,
+  enhancement: PptDocumentEnhancement,
+): Promise<Blob> {
   const pptxModule = await import('pptxgenjs');
   const pptx = new pptxModule.default();
   pptx.layout = 'LAYOUT_WIDE';
   pptx.author = 'QLEARN';
-  pptx.subject = 'Editable presentation deck generated from an approved copy plan';
-  pptx.title = enhancement?.title ?? deckPlan?.title ?? fileName.replace(/\.pptx$/iu, '');
+  pptx.subject = 'Editable presentation deck generated from approved Slide JSON';
+  pptx.title = enhancement.title;
   pptx.company = 'QLEARN';
 
-  const images = await loadImageData(deck);
-  images.forEach((image) => {
+  deckPlan.slides.forEach((plan) => {
+    const layout = enhancement.layouts.find((candidate) => candidate.pageNumber === plan.pageNumber);
+    if (!layout) return;
     const slide = pptx.addSlide();
     slide.background = { color: WHITE };
-    const plan = deckPlan?.slides.find((candidate) => candidate.id === image.slideId);
-    const layout = plan
-      ? enhancement?.layouts.find((candidate) => candidate.pageNumber === image.pageNumber) ??
-        createFallbackLayout(plan, Boolean(deckPlan?.request.logoImageDataUrl))
-      : null;
-
-    if (layout && plan) {
-      addLayoutDrivenSlide(pptx, slide, image, layout, deckPlan?.request.logoImageDataUrl);
-    } else {
-      addImageOnlySlide(slide, image);
-    }
-
-    const note = enhancement?.speakerNotes.find((item) => item.pageNumber === image.pageNumber)?.note;
+    layout.shapes.forEach((shape) => addShape(pptx, slide, shape));
+    layout.textBlocks.forEach((block) => addText(pptx, slide, block, deckPlan.request.logoImageDataUrl));
+    const note = enhancement.speakerNotes.find((item) => item.pageNumber === plan.pageNumber)?.note;
     if (note && 'addNotes' in slide && typeof slide.addNotes === 'function') slide.addNotes(note);
   });
 
-  if (deckPlan?.slides[0]) {
-    const slide = pptx.addSlide();
-    slide.background = { color: WHITE };
-    addManualTemplateSlide(pptx, slide, deckPlan.slides[0], deckPlan.request.logoImageDataUrl);
-  }
-
-  return pptx;
+  addManualTemplateSlide(pptx, deckPlan, enhancement);
+  const output = await pptx.write({ outputType: 'blob' });
+  if (output instanceof Blob) return output;
+  if (output instanceof ArrayBuffer) return new Blob([output], { type: MIME_TYPE });
+  if (typeof output === 'string') return new Blob([output], { type: MIME_TYPE });
+  return new Blob([new Uint8Array(output).slice().buffer], { type: MIME_TYPE });
 }
 
-async function loadImageData(deck: GeneratedImageDeck): Promise<Array<GeneratedSlideImage & { imageDataUrl?: string }>> {
-  const sorted = deck.images.slice().sort((left, right) => left.pageNumber - right.pageNumber);
-  return Promise.all(
-    sorted.map(async (image) => ({
-      ...image,
-      imageDataUrl: image.imageDataUrl ?? (image.imageUrl ? await imageUrlToDataUrl(image.imageUrl) : undefined),
-    })),
-  );
-}
-
-function addLayoutDrivenSlide(
-  pptx: PptxPresentation,
-  slide: PptxSlide,
-  image: GeneratedSlideImage & { imageDataUrl?: string },
-  layout: PptEditableSlideLayout,
-  logoImageDataUrl?: string,
-): void {
-  addImageLayer(slide, image, layout);
-  if (layout.visualStrategy === 'image-fallback') return;
-  layout.shapes.forEach((shape) => addEditableShape(pptx, slide, shape));
-  layout.textBlocks.forEach((block) => addEditableTextBlock(pptx, slide, block, logoImageDataUrl));
-}
-
-function addImageLayer(
-  slide: PptxSlide,
-  image: GeneratedSlideImage & { imageDataUrl?: string },
-  layout: PptEditableSlideLayout,
-): void {
-  if (!image.imageDataUrl) return;
-  const { imageLayer } = layout;
-  if (imageLayer.strategy !== 'visual-crop') {
-    slide.addImage({ data: image.imageDataUrl, x: 0, y: 0, w: SLIDE_W, h: SLIDE_H });
-    return;
-  }
-  slide.addImage({
-    data: image.imageDataUrl,
-    x: imageLayer.x,
-    y: imageLayer.y,
-    w: imageLayer.w,
-    h: imageLayer.h,
-    transparency: imageLayer.transparency ?? 0,
-  });
-}
-
-function addEditableShape(pptx: PptxPresentation, slide: PptxSlide, shape: PptEditableShape): void {
+function addShape(pptx: PptxPresentation, slide: PptxSlide, shape: PptEditableShape): void {
   const shapeType = {
     rect: pptx.ShapeType.rect,
     roundRect: pptx.ShapeType.roundRect,
     ellipse: pptx.ShapeType.ellipse,
     line: pptx.ShapeType.line,
   }[shape.type];
-
   slide.addShape(shapeType, {
     x: shape.x,
     y: shape.y,
@@ -151,17 +108,14 @@ function addEditableShape(pptx: PptxPresentation, slide: PptxSlide, shape: PptEd
   });
 }
 
-function addEditableTextBlock(
-  pptx: PptxPresentation,
-  slide: PptxSlide,
-  block: PptEditableTextBlock,
-  logoImageDataUrl?: string,
-): void {
+function addText(pptx: PptxPresentation, slide: PptxSlide, block: PptEditableTextBlock, logoImageDataUrl?: string): void {
   if (block.role === 'logo') {
-    addLogoBlock(pptx, slide, block, logoImageDataUrl);
-    return;
+    if (logoImageDataUrl) {
+      slide.addImage({ data: logoImageDataUrl, x: block.x, y: block.y, w: block.w, h: block.h, sizing: { type: 'contain', x: block.x, y: block.y, w: block.w, h: block.h } });
+      return;
+    }
+    slide.addShape(pptx.ShapeType.roundRect, { x: block.x, y: block.y, w: block.w, h: block.h, rectRadius: 0.06, fill: { color: WHITE }, line: { color: BORDER, width: 0.75 } });
   }
-
   const text = safeText(block.text);
   if (!text) return;
   slide.addText(text, {
@@ -176,129 +130,33 @@ function addEditableTextBlock(
     align: block.align ?? 'left',
     fit: 'shrink',
     margin: 0,
-    breakLine: false,
   });
 }
 
-function addLogoBlock(
-  pptx: PptxPresentation,
-  slide: PptxSlide,
-  block: PptEditableTextBlock,
-  logoImageDataUrl?: string,
-): void {
-  if (logoImageDataUrl) {
-    slide.addImage({
-      data: logoImageDataUrl,
-      x: block.x,
-      y: block.y,
-      w: block.w,
-      h: block.h,
-      sizing: { type: 'contain', x: block.x, y: block.y, w: block.w, h: block.h },
-    });
-    return;
-  }
-
-  slide.addShape(pptx.ShapeType.roundRect, {
-    x: block.x,
-    y: block.y,
-    w: block.w,
-    h: block.h,
-    rectRadius: 0.06,
-    fill: { color: WHITE },
-    line: { color: BORDER, width: 0.75 },
-  });
-  slide.addText(safeText(block.text) || '\uB85C\uACE0', {
-    x: block.x,
-    y: block.y + Math.max(0.02, block.h * 0.22),
-    w: block.w,
-    h: Math.max(0.14, block.h * 0.48),
-    fontFace: FONT_FACE,
-    fontSize: block.fontSize,
-    bold: true,
-    color: block.color ?? '85878A',
-    align: 'center',
-    fit: 'shrink',
-    margin: 0,
-  });
-}
-
-function addManualTemplateSlide(
-  pptx: PptxPresentation,
-  slide: PptxSlide,
-  styleSeed: SlidePlan,
-  logoImageDataUrl?: string,
-): void {
-  const manualPlan: SlidePlan = {
-    ...styleSeed,
-    id: 'manual-template-slide',
-    pageNumber: 0,
-    title: '\uC218\uB3D9 \uCD94\uAC00 \uC6A9 \uC2AC\uB77C\uC774\uB4DC',
-    subtitle: '\uD544\uC694\uD55C \uB0B4\uC6A9\uC744 \uC785\uB825\uD574 \uB3D9\uC77C\uD55C \uC2A4\uD0C0\uC77C\uB85C \uC0AC\uC6A9\uD558\uC138\uC694.',
-    mainMessage: '\uD575\uC2EC \uBA54\uC2DC\uC9C0\uB97C \uC785\uB825\uD558\uC138\uC694.',
-    labels: ['\uBC30\uACBD', '\uD575\uC2EC \uC815\uBCF4', '\uC2E4\uD589'],
-    takeaway: '\uC694\uC57D \uBA54\uC2DC\uC9C0\uB97C \uC785\uB825\uD558\uC138\uC694.',
-    imagePrompt: '',
-  };
-  slide.addShape(pptx.ShapeType.rect, {
-    x: 0.55,
-    y: 0.42,
-    w: 0.07,
-    h: 0.95,
-    fill: { color: NAVY },
-    line: { color: NAVY, transparency: 100 },
-  });
-  [
-    { id: 'title', role: 'title' as const, text: manualPlan.title, x: 0.82, y: 0.42, w: 7.25, h: 0.52, fontSize: 25, bold: true, color: NAVY },
-    { id: 'subtitle', role: 'subtitle' as const, text: manualPlan.subtitle, x: 0.82, y: 1.02, w: 6.0, h: 0.32, fontSize: 11, color: '6B7280' },
-    { id: 'label-1', role: 'label' as const, text: manualPlan.labels[0], x: 0.9, y: 2.35, w: 1.8, h: 0.28, fontSize: 14, bold: true, color: NAVY, align: 'center' as const },
-    { id: 'label-2', role: 'label' as const, text: manualPlan.labels[1], x: 3.1, y: 2.35, w: 1.8, h: 0.28, fontSize: 14, bold: true, color: NAVY, align: 'center' as const },
-    { id: 'label-3', role: 'label' as const, text: manualPlan.labels[2], x: 5.3, y: 2.35, w: 1.25, h: 0.28, fontSize: 14, bold: true, color: NAVY, align: 'center' as const },
-    { id: 'takeaway', role: 'takeaway' as const, text: manualPlan.takeaway, x: 0.9, y: 5.7, w: 11.15, h: 0.3, fontSize: 13, bold: true, color: NAVY, align: 'center' as const },
-    { id: 'logo', role: 'logo' as const, text: logoImageDataUrl ? '' : '로고', x: 11.62, y: 0.38, w: 1.12, h: 0.34, fontSize: 8, bold: true, color: '85878A', align: 'center' as const },
-  ].forEach((block) => addEditableTextBlock(pptx, slide, block, logoImageDataUrl));
-  slide.addShape(pptx.ShapeType.roundRect, {
-    x: 6.85,
-    y: 1.28,
-    w: 5.85,
-    h: 3.75,
-    rectRadius: 0.08,
-    fill: { color: 'EFF5FE', transparency: 18 },
-    line: { color: BORDER, width: 1 },
-  });
-  slide.addText('\uC774\uBBF8\uC9C0 \uB610\uB294 \uB2E4\uC774\uC5B4\uADF8\uB7A8 \uC601\uC5ED', {
-    x: 7.25,
-    y: 2.95,
-    w: 5.05,
-    h: 0.32,
-    fontFace: FONT_FACE,
-    fontSize: 15,
-    bold: true,
-    color: NAVY,
-    align: 'center',
-    margin: 0,
-    fit: 'shrink',
-  });
-}
-
-function addImageOnlySlide(slide: PptxSlide, image: GeneratedSlideImage & { imageDataUrl?: string }): void {
-  if (!image.imageDataUrl) return;
-  slide.addImage({ data: image.imageDataUrl, x: 0, y: 0, w: SLIDE_W, h: SLIDE_H });
+function addManualTemplateSlide(pptx: PptxPresentation, deckPlan: PptDeckPlan, enhancement: PptDocumentEnhancement): void {
+  const slide = pptx.addSlide();
+  slide.background = { color: WHITE };
+  slide.addShape(pptx.ShapeType.rect, { x: 0.52, y: 0.52, w: 0.06, h: 1.2, fill: { color: 'FE6621' }, line: { color: 'FE6621', transparency: 100 } });
+  const title = deckPlan.request.targetLanguage === 'Korean' ? '\uC218\uB3D9 \uCD94\uAC00 \uC6A9 \uC2AC\uB77C\uC774\uB4DC' : 'Manual slide template';
+  const subtitle = deckPlan.request.targetLanguage === 'Korean' ? '\uD544\uC694\uD55C \uB0B4\uC6A9\uC744 \uC785\uB825\uD574 \uB3D9\uC77C\uD55C \uC2A4\uD0C0\uC77C\uB85C \uC0AC\uC6A9\uD558\uC138\uC694.' : 'Add new content using the same editable design system.';
+  slide.addText(title, { x: 0.76, y: 0.5, w: 8.8, h: 0.5, fontFace: FONT_FACE, fontSize: 25, bold: true, color: NAVY, margin: 0, fit: 'shrink' });
+  slide.addText(subtitle, { x: 0.76, y: 1.06, w: 8.8, h: 0.3, fontFace: FONT_FACE, fontSize: 11.5, color: '5F6F89', margin: 0, fit: 'shrink' });
+  slide.addShape(pptx.ShapeType.roundRect, { x: 0.88, y: 2.0, w: 11.55, h: 3.75, rectRadius: 0.08, fill: { color: 'EFF5FE' }, line: { color: BORDER, width: 1 } });
+  slide.addText(deckPlan.request.targetLanguage === 'Korean' ? '\uC5EC\uAE30\uC5D0 \uC218\uB3D9\uC73C\uB85C \uCD94\uAC00\uD560 \uB0B4\uC6A9\uC744 \uC785\uB825\uD558\uC138\uC694.' : 'Add editable text, diagrams, charts, or tables here.', { x: 1.35, y: 3.63, w: 10.65, h: 0.36, fontFace: FONT_FACE, fontSize: 20, bold: true, color: NAVY, align: 'center', margin: 0, fit: 'shrink' });
+  slide.addShape(pptx.ShapeType.line, { x: 0.52, y: 6.52, w: 12.25, h: 0, line: { color: BORDER, width: 1 } });
+  slide.addText('QLEARN', { x: 0.76, y: 6.76, w: 1.4, h: 0.25, fontFace: FONT_FACE, fontSize: 10.5, bold: true, color: NAVY, margin: 0 });
+  slide.addText(String(deckPlan.slides.length + 1).padStart(2, '0'), { x: 12.15, y: 6.69, w: 0.5, h: 0.16, fontFace: FONT_FACE, fontSize: 9.5, bold: true, color: 'FFFFFF', align: 'center', margin: 0 });
+  void enhancement;
 }
 
 function safeText(value: string): string {
   return stripEllipsis(value).replace(/\s+/g, ' ').trim();
 }
 
-async function imageUrlToDataUrl(imageUrl: string): Promise<string> {
-  const response = await fetch(imageUrl);
-  if (!response.ok) throw new Error(`Failed to load generated slide image: ${response.status}`);
-  const blob = await response.blob();
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = () => reject(new Error('Failed to convert generated slide image.'));
-    reader.onload = () => typeof reader.result === 'string'
-      ? resolve(reader.result)
-      : reject(new Error('Generated slide image conversion returned an invalid result.'));
-    reader.readAsDataURL(blob);
-  });
+function downloadBlob(blob: Blob, fileName: string): void {
+  const anchor = document.createElement('a');
+  anchor.href = URL.createObjectURL(blob);
+  anchor.download = fileName;
+  anchor.click();
+  window.setTimeout(() => URL.revokeObjectURL(anchor.href), 0);
 }

@@ -4,7 +4,7 @@ import { pptMakerService } from '@/services/pptMaker.service';
 import { getDeckCopyQaIssues } from '@/utils/pptMaker';
 
 describe('pptMakerService', () => {
-  it('generates a deck plan with slide prompts', async () => {
+  it('generates a layout-ready deck plan without creating image prompts', async () => {
     const deck = await pptMakerService.generateDeckPlan(samplePptMakerRequest);
 
     expect(deck.slides).toHaveLength(samplePptMakerRequest.slideCount);
@@ -17,11 +17,7 @@ describe('pptMakerService', () => {
       'card-grid',
       'closing-commitment',
     ]);
-    expect(deck.slides[0].imagePrompt).toContain('Create one text-free visual asset for presentation slide 1');
-    expect(deck.slides[0].imagePrompt).toContain('Required visual structure: hero-visual');
-    expect(deck.slides[0].imagePrompt).toContain('text-free visual asset');
-    expect(deck.slides[0].imagePrompt).toContain('Do not render readable text');
-    expect(deck.slides[0].imageSlot.prompt).toContain('Text-free');
+    expect(deck.slides.every((slide) => slide.imagePrompt.length === 0)).toBe(true);
   });
 
   it('generates mock slide images when Supabase is not configured', async () => {

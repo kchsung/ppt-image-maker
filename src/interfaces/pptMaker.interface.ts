@@ -17,15 +17,14 @@ export interface PptMakerService {
 }
 
 export interface PptExportService {
-  exportImageDeck(
-    deck: GeneratedImageDeck,
-    deckPlan?: PptDeckPlan | null,
-    fileName?: string,
-    enhancement?: PptDocumentEnhancement,
+  exportDeck(
+    deckPlan: PptDeckPlan,
+    enhancement: PptDocumentEnhancement,
+    slideElements: HTMLElement[],
   ): Promise<void>;
-  createImageDeckBlob(
-    deck: GeneratedImageDeck,
-    deckPlan?: PptDeckPlan | null,
-    enhancement?: PptDocumentEnhancement,
+  createDeckBlob(
+    deckPlan: PptDeckPlan,
+    enhancement: PptDocumentEnhancement,
+    slideElements?: HTMLElement[],
   ): Promise<Blob>;
 }

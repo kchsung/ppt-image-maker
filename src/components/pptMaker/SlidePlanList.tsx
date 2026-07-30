@@ -1,17 +1,10 @@
-import { Copy, Layers } from 'lucide-react';
-import { toast } from 'sonner';
+import { Layers } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
-import type { PptDeckPlan, SlidePlan } from '@/types/models/pptMaker.model';
+import type { PptDeckPlan } from '@/types/models/pptMaker.model';
 
 interface SlidePlanListProps {
   deckPlan: PptDeckPlan | null;
-}
-
-function copyPrompt(slide: SlidePlan) {
-  void navigator.clipboard.writeText(slide.imagePrompt);
-  toast.success(`Slide ${slide.pageNumber} prompt copied.`);
 }
 
 export function SlidePlanList({ deckPlan }: SlidePlanListProps) {
@@ -26,7 +19,7 @@ export function SlidePlanList({ deckPlan }: SlidePlanListProps) {
             <Layers className="mb-3 h-8 w-8 text-text-subtle" />
             <p className="text-sm font-semibold text-text-main">No deck plan yet</p>
             <p className="mt-1 text-sm text-text-subtle">
-              Add source text and generate a merge-ready image prompt plan.
+              Add source text and generate a structured, editable Slide JSON plan.
             </p>
           </div>
         </CardContent>
@@ -58,9 +51,6 @@ export function SlidePlanList({ deckPlan }: SlidePlanListProps) {
                 <h3 className="font-bold text-text-main">{slide.title}</h3>
                 <p className="mt-1 text-sm text-text-subtle">{slide.subtitle}</p>
               </div>
-              <Button variant="secondary" onClick={() => copyPrompt(slide)} aria-label={`Copy slide ${slide.pageNumber} prompt`}>
-                <Copy className="h-4 w-4" />
-              </Button>
             </div>
             <p className="text-sm leading-6 text-text-main">{slide.mainMessage}</p>
             <div className="mt-3 flex flex-wrap gap-2">

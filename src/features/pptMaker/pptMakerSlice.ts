@@ -1,5 +1,6 @@
 import { createAsyncThunk, createSlice, type PayloadAction } from '@reduxjs/toolkit';
-import { defaultPptTemplate, pptTemplates } from '@/mocks/pptTemplates.mock';
+import { defaultPptTemplate, getTemplateDesignProfile, pptTemplates } from '@/mocks/pptTemplates.mock';
+import { getPresentationDesignGuide } from '@/mocks/presentationGuides.mock';
 import { defaultStyleReference } from '@/mocks/pptMaker.mock';
 import { enhancePptDocument } from '@/services/pptDocument.service';
 import { pptMakerService } from '@/services/pptMaker.service';
@@ -16,6 +17,7 @@ interface PptMakerState {
   form: PptMakerFormState;
   deckPlan: PptDeckPlan | null;
   imageDeck: GeneratedImageDeck | null;
+  generationJobId: string | null;
   documentEnhancement: PptDocumentEnhancement | null;
   status: 'idle' | 'loading' | 'succeeded' | 'failed';
   imageStatus: 'idle' | 'loading' | 'succeeded' | 'failed';
@@ -32,6 +34,10 @@ const initialState: PptMakerState = {
     audience: 'university students',
     purpose: 'summer school lecture',
     slideCount: 6,
+    contentDensity: 'light',
+    presentationIntent: 'education-lecture',
+    coreMessage: '',
+    requiredSections: '',
     styleNotes: `${defaultStyleReference.notes} Use ${defaultPptTemplate.label}: ${defaultPptTemplate.description}`,
     styleSourceMode: 'template',
     selectedTemplateId: defaultPptTemplate.id,
@@ -40,6 +46,7 @@ const initialState: PptMakerState = {
   },
   deckPlan: null,
   imageDeck: null,
+  generationJobId: null,
   documentEnhancement: null,
   status: 'idle',
   imageStatus: 'idle',
@@ -52,20 +59,32 @@ export function toPptMakerRequest(form: PptMakerFormState): PptMakerRequest {
     ? pptTemplates.find((template) => template.id === form.selectedTemplateId)
     : undefined;
   const usesTemplate = form.styleSourceMode === 'template' && selectedTemplate;
+  const presentationIntent = form.presentationIntent ?? 'education-lecture';
+  const presentationGuide = getPresentationDesignGuide(presentationIntent);
+  const getTrimmedText = (value: unknown) => typeof value === 'string' ? value.trim() : '';
+  const sourceText = getTrimmedText(form.sourceText);
+  const slideCount = Number.isFinite(form.slideCount) ? Math.min(100, Math.max(2, form.slideCount)) : 6;
 
   return {
-    sourceText: form.sourceText,
+    sourceText,
     sourceDocument: form.sourceDocument ?? undefined,
-    creationInstructions: form.creationInstructions.trim() || undefined,
+    creationInstructions: getTrimmedText(form.creationInstructions) || undefined,
     targetLanguage: form.targetLanguage,
-    audience: form.audience,
-    purpose: form.purpose,
-    slideCount: form.slideCount,
+    audience: getTrimmedText(form.audience) || 'General audience',
+    purpose: getTrimmedText(form.purpose) || 'Business presentation',
+    slideCount,
+    contentDensity: form.contentDensity,
+    presentationIntent,
+    coreMessage: getTrimmedText(form.coreMessage) || undefined,
+    requiredSections: getTrimmedText(form.requiredSections) || undefined,
+    presentationGuide,
     styleReference: {
       ...defaultStyleReference,
+      id: usesTemplate ? selectedTemplate.id : defaultStyleReference.id,
       name: usesTemplate ? selectedTemplate.name : defaultStyleReference.name,
       notes: form.styleNotes,
       accentColorLabel: usesTemplate ? selectedTemplate.accentColorLabel : defaultStyleReference.accentColorLabel,
+      templateDesign: usesTemplate ? getTemplateDesignProfile(selectedTemplate.id) : undefined,
     },
     styleImageDataUrl: form.styleSourceMode === 'upload' ? (form.styleImageDataUrl ?? undefined) : undefined,
     styleImageUrl: usesTemplate ? selectedTemplate.imageUrl : undefined,
@@ -87,11 +106,14 @@ export const generateSlideImages = createAsyncThunk(
   },
 );
 
+export const registerPresentationJob = createAsyncThunk(
+  'pptMaker/registerPresentationJob',
+  async (deckPlan: PptDeckPlan) => pptMakerService.createGenerationJob(deckPlan),
+);
+
 export const enhanceGeneratedPptDocument = createAsyncThunk(
   'pptMaker/enhanceGeneratedPptDocument',
-  async ({ deckPlan, imageDeck }: { deckPlan: PptDeckPlan; imageDeck: GeneratedImageDeck }) => {
-    return enhancePptDocument(deckPlan, imageDeck);
-  },
+  async (deckPlan: PptDeckPlan) => enhancePptDocument(deckPlan),
 );
 
 export const pptMakerSlice = createSlice({
@@ -104,6 +126,7 @@ export const pptMakerSlice = createSlice({
     resetDeckPlan(state) {
       state.deckPlan = null;
       state.imageDeck = null;
+      state.generationJobId = null;
       state.documentEnhancement = null;
       state.status = 'idle';
       state.imageStatus = 'idle';
@@ -143,6 +166,7 @@ export const pptMakerSlice = createSlice({
         state.status = 'succeeded';
         state.deckPlan = action.payload;
         state.imageDeck = null;
+        state.generationJobId = null;
         state.documentEnhancement = null;
       })
       .addCase(generateDeckPlan.rejected, (state, action) => {
@@ -168,6 +192,15 @@ export const pptMakerSlice = createSlice({
       .addCase(generateSlideImages.rejected, (state, action) => {
         state.imageStatus = 'failed';
         state.error = action.error.message ?? 'Slide image generation failed.';
+      })
+      .addCase(registerPresentationJob.pending, (state) => {
+        state.error = null;
+      })
+      .addCase(registerPresentationJob.fulfilled, (state, action) => {
+        state.generationJobId = action.payload?.id ?? null;
+      })
+      .addCase(registerPresentationJob.rejected, (state, action) => {
+        state.error = action.error.message ?? 'Presentation registration failed.';
       })
       .addCase(enhanceGeneratedPptDocument.pending, (state) => {
         state.documentStatus = 'loading';

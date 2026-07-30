@@ -1,188 +1,51 @@
 # PPT Maker Implementation Notes
 
-> Product requirements and acceptance criteria are maintained in
-> [`ppt-maker-product-spec.md`](./ppt-maker-product-spec.md). This document
-> explains the implementation and deployment details that satisfy that contract.
+## Current flow
 
-## Overview
+`/ppt-maker` creates editable presentations without a slide-image generation step:
 
-`/ppt-maker` turns source text and a template or sample slide image into an editable PPTX. Claude first creates and validates the slide copy plan, OpenAI generates a complete per-slide visual reference with the approved copy, and Claude's official `pptx` skill rebuilds the final file as a native PowerPoint document.
+1. `generate-ppt-deck-blueprint` uses OpenAI to create and validate the whole-deck strategy: core thesis, audience need, desired outcome, narrative arc, and contiguous named sections.
+2. Each Blueprint section contains a purpose, key message, page range, and visual focus. A section contains at most ten slides, so a 50-slide deck is planned as five coherent section batches rather than one oversized response.
+3. `generate-ppt-slide-plan` creates Section Slide JSON batches with a bounded concurrency of two. Each call receives the controlling Blueprint and a Blueprint-derived handoff from the preceding sections, so the story continues without waiting for another section request to finish.
+4. Each Slide JSON record contains a decision-oriented title, slide objective, main message, three to five supporting proof points (`heading` + complete `detail`), a recommended decision, and a varied visual structure.
+5. `pptDocument.service.ts` is the layout engine. It maps the approved plan to editable text, shape, footer, and logo rules.
+6. `PptHtmlSlide.tsx` renders the same plan as HTML/CSS for both the visible preview and an off-screen export surface.
+7. `dom-to-pptx` converts that HTML/CSS surface into editable PowerPoint objects. `PptxGenJS` remains the browser fallback and supplies the manual-addition slide.
+8. List optionally sends the finished binary to `save-pptx-output`, a short Supabase Storage request.
 
-The implementation intentionally avoids doing the whole deck generation inside one Edge Function call. Supabase Free tier Edge Functions can time out on long-running image/PPT work, so the flow is split into a job plus one image-generation call per slide.
+The primary path does not call `generate-ppt-image-deck`, Claude, a Netlify worker, or a long-running edge function.
 
-## User Flow
+## Presentation planning brief
 
-1. User opens `http://127.0.0.1:5173/ppt-maker`.
-2. User enters source text, audience, purpose, language, and slide count.
-3. User chooses a style source:
-   - Template carousel: `Template 01` through `Template 16`
-   - Uploaded sample slide image
-4. User clicks `Generate PPT images`.
-5. App switches to the Output tab and shows progress.
-6. App calls Claude to create a deck plan with approved copy and a different `visualStructure` for each slide, then blocks image generation until copy and layout-diversity QA pass.
-7. App registers a Supabase generation job.
-8. App calls the image Edge Function once per slide.
-9. Edge Function stores each generated slide image in Supabase Storage and updates job/item status.
-10. App sends the approved copy plan and all generated slide references to the Claude Files API.
-11. Claude's `pptx` skill uses code execution to create one native PPTX: approved copy becomes editable Pretendard text, simple visual elements become editable shapes where feasible, and complex artwork remains a raster asset.
-12. The Edge Function stores the final PPTX in `ppt-generations/{jobId}/final/` and returns its URL.
-13. User previews the final document through the Office viewer or downloads the exact stored PPTX.
+The maker turns the initial request into an explicit planning brief before it creates Slide JSON. Use the input fields to define the presentation rather than hiding these requirements in the source text:
 
-## Main Route And UI Files
+- **Audience** and **Purpose**: who must understand the material and what outcome the deck should create.
+- **Presentation format**: selects a default narrative and design guide for an executive proposal, strategic decision, education session, investment or IR deck, or implementation roadmap.
+- **Core message**: the single conclusion that the cover, evidence slides, and closing decision must reinforce.
+- **Required sections**: named content that must appear in the narrative arc, such as the current challenge, operating model, rollout, and decision request.
+- **Content detail**: `Light` produces three concise proof points, `Standard` produces four contextual proof points, and `Detailed` produces five substantial proof points on each slide.
+- **Additional instructions**: source-specific constraints, exclusions, evidence requirements, tone, or mandatory data points.
 
-- Route: `/ppt-maker`
-- Page: `src/pages/pptMaker/PptMakerPage.tsx`
-- Form and template carousel: `src/components/pptMaker/PptMakerForm.tsx`
-- Progress panel: `src/components/pptMaker/GenerationProgressPanel.tsx`
-- Output image deck panel: `src/components/pptMaker/GeneratedImageDeckPanel.tsx`
-- Redux slice: `src/features/pptMaker/pptMakerSlice.ts`
-- Model types: `src/types/models/pptMaker.model.ts`
+`generate-ppt-deck-blueprint` sends this brief with the source text to OpenAI before any slide is drafted. The Blueprint maps the required sections into a coherent page plan with no more than ten slides per section. The client then calls `generate-ppt-slide-plan` once per section, with at most two section calls in flight. Every request receives a short handoff derived from the shared Blueprint rather than waiting for earlier model output. This keeps 50- to 100-slide work bounded, retryable by section, parallel where safe, and grounded in one shared storyline. The selected QLEARN template remains a style reference, not a reason to repeat the same composition on every slide.
 
-## Services
+## Important files
 
-- `src/services/pptMaker.service.ts`
-  - Calls `generate-ppt-slide-plan` to create the approved `PptDeckPlan`.
-  - Sends each slide's explicit `visualStructure` and composition instruction to OpenAI so a template style does not force every slide into the same diagram.
-  - Calls `create-ppt-generation-job`.
-  - Calls `generate-ppt-image-deck` once per slide.
-  - Combines returned slide images into `GeneratedImageDeck`.
+- `/ppt-maker`: `src/pages/pptMaker/PptMakerPage.tsx`
+- `/ppt-admin`: `src/pages/pptAdmin/PptAdminPage.tsx`
+- Slide JSON planner: `src/services/pptMaker.service.ts`
+- Layout engine: `src/services/pptDocument.service.ts`
+- Shared HTML/CSS slide: `src/components/pptMaker/PptHtmlSlide.tsx`
+- Export-only DOM deck: `src/components/pptMaker/PptDomExportDeck.tsx`
+- PPTX exporter: `src/services/pptExport.service.ts`
 
-- `src/services/pptDocument.service.ts`
-  - Calls `generate-claude-pptx` once after all slide reference images are ready.
-  - Uses the returned Claude-native PPTX URL as the primary final output.
-  - Keeps the old image-only layout path only for local mock mode, where Supabase/Claude is unavailable.
+## Supabase functions
 
-- `src/services/pptExport.service.ts`
-  - Remains a browser-only fallback for local mock mode.
-  - Production downloads the PPTX generated by Claude instead of rebuilding it with a fixed PptxGenJS layout.
+- `generate-ppt-deck-blueprint`: whole-deck strategy, sections, page ranges, and section QA.
+- `generate-ppt-slide-plan`: section-level OpenAI copy planning and QA (maximum ten slides per call).
+- `create-ppt-generation-job`: saves a `layout-only` deck plan; it creates no image items for new projects.
+- `save-pptx-output`: uploads browser-created PPTX output to `ppt-generations/{jobId}/final/`.
 
-- `src/utils/supabaseFunctionError.ts`
-  - Reads the JSON body from Supabase `FunctionsHttpError`.
-  - Shows useful errors such as `OPENAI_API_KEY is not configured.` instead of only `Edge Function returned a non-2xx status code`.
-
-## Slide Composition Diversity
-
-Claude plans a story role and a visual structure for every slide before OpenAI is called. Supported structures include hero visual, message emphasis, card grid, comparison, numbered process, before/after mapping, hub-and-spoke, metrics dashboard, roadmap, pyramid framework, case story, and closing commitment.
-
-The copy-plan QA rejects missing structures, consecutive repeated structures, decks with fewer than `min(slide count, 4)` distinct structures, a non-hero first slide, or a non-closing final slide. The selected structure is visible in the planning detail panel and is included verbatim in the image-generation prompt.
-
-## Templates
-
-Template metadata lives in:
-
-- `src/mocks/pptTemplates.mock.ts`
-
-The image files are stored in the public Supabase Storage bucket:
-
-- Bucket: `ppt-templates`
-- Public URL base: `https://vhktpqsxzcihwijnfaaf.supabase.co/storage/v1/object/public/ppt-templates`
-- Current objects: `template-01.png` through `template-16.png`
-
-To add a new template:
-
-1. Upload the PNG to `ppt-templates/template-NN.png`.
-2. Add a matching entry to `src/mocks/pptTemplates.mock.ts`.
-3. Include `id`, `templateNumber`, `label`, `name`, `description`, `accentColorLabel`, `imageUrl`, and `storagePath`.
-
-Example upload with Supabase CLI:
-
-```powershell
-supabase --experimental storage cp --content-type image/png .tmp\template-17.png ss:///ppt-templates/template-17.png
-```
-
-## Supabase Database
-
-Migration:
-
-- `supabase/migrations/20260716143000_create_ppt_generation_jobs.sql`
-
-Tables:
-
-- `generation_jobs`
-  - One row per deck generation request.
-  - Tracks `status`, `progress`, `total_items`, `completed_items`, request JSON, and errors.
-
-- `generation_items`
-  - One row per generated slide image.
-  - Tracks item status, input, output Storage path, attempts, and error message.
-
-Storage:
-
-- `ppt-templates`
-  - Public template reference images.
-
-- `ppt-generations`
-  - Public generated slide images.
-  - Created by migration with PNG MIME type and 10 MB file size limit.
-
-## Supabase Edge Functions
-
-### `generate-ppt-slide-plan`
-
-Path:
-
-- `supabase/functions/generate-ppt-slide-plan/index.ts`
-
-Responsibilities:
-
-- Call Claude before image generation.
-- Return title, slide message, title, subtitle, labels, takeaway, and visual archetype for every slide.
-- Reject empty copy, ellipses, template placeholders, page markers, and mixed-language fragments that violate the requested language.
-- Reject or repair titles that are too long for a two-line editable title area.
-- Repair the draft once when QA identifies issues.
-
-### `create-ppt-generation-job`
-
-Path:
-
-- `supabase/functions/create-ppt-generation-job/index.ts`
-
-Responsibilities:
-
-- Validate `deckPlan`.
-- Create a `generation_jobs` row.
-- Create one `generation_items` row per slide.
-- Return `jobId` and item IDs immediately.
-
-This function does not call OpenAI.
-
-### `generate-ppt-image-deck`
-
-Path:
-
-- `supabase/functions/generate-ppt-image-deck/index.ts`
-
-Responsibilities:
-
-- Accept exactly one slide per invocation.
-- Mark the job/item as `processing`.
-- Load the selected template image or uploaded data URL.
-- Call OpenAI image generation/edit API.
-- Render only the already approved title, subtitle, labels, and takeaway. The image is a visual reference, not the final editable PPTX.
-- Upload the generated PNG to `ppt-generations`.
-- Mark the item as `succeeded` or `failed`.
-- Update job progress.
-- Return the generated image URL and metadata.
-
-This one-slide-per-call structure is deliberate. It reduces timeout risk and allows partial retry/recovery later.
-
-### `generate-claude-pptx`
-
-Path:
-
-- `supabase/functions/generate-claude-pptx/index.ts`
-
-Responsibilities:
-
-- Upload generated reference slides (and an optional logo) through the Claude Files API.
-- Use the official Anthropic `pptx` skill plus code execution to create one native `.pptx` file.
-- Treat the approved deck plan as the copy source of truth; the reference image supplies position, hierarchy, color, and visual-treatment context.
-- Rebuild text as editable Pretendard text, recreate simple visuals with native shapes when feasible, and preserve only complex visual layers as cropped raster assets.
-- Store the returned `.pptx` in `ppt-generations` and save its Storage path in `generation_jobs.result_path`.
-
-## Environment Variables
-
-Local frontend `.env`:
+## Environment
 
 ```dotenv
 VITE_SUPABASE_URL=
@@ -190,170 +53,32 @@ VITE_SUPABASE_ANON_KEY=
 VITE_USE_MOCK=false
 ```
 
-Supabase Edge Function secrets:
+Supabase server secrets:
 
 ```dotenv
 OPENAI_API_KEY=
-OPENAI_IMAGE_MODEL=gpt-image-2
-CLAUDE_API_KEY=
-CLAUDE_MODEL=claude-sonnet-5
+OPENAI_PPT_PLAN_MODEL=gpt-4o
 ```
 
-Required:
+Do not expose `SUPABASE_SERVICE_ROLE_KEY` or `OPENAI_API_KEY` in the Vite environment. The service role key remains inside Supabase functions for Storage persistence only.
 
-- `OPENAI_API_KEY`
-- `CLAUDE_API_KEY`
-
-Optional:
-
-- `OPENAI_IMAGE_MODEL`
-- `CLAUDE_MODEL`
-
-If model secrets are not set, the Edge Functions use their default values.
-
-The final Claude request uses the official `pptx` skill and managed code execution. Keep slide-image generation one slide per request; final native PPTX generation is a separate request after all images are ready.
-
-Important:
-
-- Do not commit `.env`.
-- `.env` is ignored by `.gitignore`.
-- Only `.env.example` should be committed.
-- Supabase Edge Functions cannot read local `.env`; secrets must be set on the Supabase project.
-
-Set OpenAI key from local `.env`:
+## Deployment
 
 ```powershell
-supabase login
-$openAiKey = (Get-Content .env | Where-Object { $_ -match '^OPENAI_API_KEY=' } | Select-Object -First 1) -replace '^OPENAI_API_KEY=', ''
-supabase secrets set "OPENAI_API_KEY=$openAiKey" --project-ref vhktpqsxzcihwijnfaaf
-```
-
-Set Claude key from local `.env`:
-
-```powershell
-$claudeKey = (Get-Content .env | Where-Object { $_ -match '^CLAUDE_API_KEY=' } | Select-Object -First 1) -replace '^CLAUDE_API_KEY=', ''
-supabase secrets set "CLAUDE_API_KEY=$claudeKey" "CLAUDE_MODEL=claude-sonnet-5" --project-ref vhktpqsxzcihwijnfaaf
-```
-
-Verify:
-
-```powershell
-supabase secrets list --project-ref vhktpqsxzcihwijnfaaf
-```
-
-## Deployment Commands
-
-Apply database migrations:
-
-```powershell
-supabase db push --linked
-```
-
-Deploy Edge Functions:
-
-```powershell
-supabase functions deploy create-ppt-generation-job --project-ref vhktpqsxzcihwijnfaaf
 supabase functions deploy generate-ppt-slide-plan --project-ref vhktpqsxzcihwijnfaaf
-supabase functions deploy generate-ppt-image-deck --project-ref vhktpqsxzcihwijnfaaf
-supabase functions deploy generate-claude-pptx --project-ref vhktpqsxzcihwijnfaaf
+supabase functions deploy generate-ppt-deck-blueprint --project-ref vhktpqsxzcihwijnfaaf
+supabase functions deploy create-ppt-generation-job --project-ref vhktpqsxzcihwijnfaaf
+supabase functions deploy save-pptx-output --project-ref vhktpqsxzcihwijnfaaf
 ```
 
-## Validation
+## Quality checks
 
-Run before merging:
+The browser flow validates copy before layout generation and uses the same DOM for preview and export. `dom-to-pptx` is the primary editable converter; the PptxGenJS fallback keeps export available where DOM conversion cannot run.
+
+LibreOffice rendering, PDF conversion, and pixel comparison require a separate long-running Node/container QA worker. They are deliberately not put back into the interactive export path, because that would reintroduce the timeout behavior this architecture removes.
 
 ```powershell
 npm run lint
 npm run test:run
 npm run build
 ```
-
-For the PPT generation regression suite:
-
-```powershell
-npm run test:ppt-generation
-```
-
-This suite verifies the copy-plan language QA, Claude repair/rejection flow before image generation, copy-bearing visual-reference prompts, and Admin protection for legacy jobs without a passed copy QA result.
-
-Expected:
-
-- TypeScript compile passes.
-- Vitest suite passes.
-- Vite production build passes.
-
-Known build warning:
-
-- Vite may warn that chunks are larger than 500 KB because `pptxgenjs` is included. This is currently accepted for the prototype.
-
-## Troubleshooting
-
-### `Slide 1 image generation failed: OPENAI_API_KEY is not configured.`
-
-The OpenAI key is missing from Supabase Edge Function secrets.
-
-Fix:
-
-```powershell
-supabase secrets set "OPENAI_API_KEY=$openAiKey" --project-ref vhktpqsxzcihwijnfaaf
-```
-
-### Browser shows CORS plus 500
-
-The root cause is usually the Edge Function 500. The browser can show it as a CORS-like failure if the gateway or function error response is interrupted.
-
-Check:
-
-```powershell
-curl.exe -i -X OPTIONS https://vhktpqsxzcihwijnfaaf.supabase.co/functions/v1/generate-ppt-image-deck `
-  -H "Origin: http://127.0.0.1:5173" `
-  -H "Access-Control-Request-Method: POST" `
-  -H "Access-Control-Request-Headers: authorization, x-client-info, apikey, content-type"
-```
-
-Expected header:
-
-```text
-Access-Control-Allow-Origin: *
-```
-
-### Image generation times out
-
-The current design already splits image generation into one Edge Function call per slide. If a single slide still times out:
-
-- Reduce image prompt complexity.
-- Lower image model quality if supported.
-- Retry only the failed item.
-- Move generation to a long-running worker if production workloads grow.
-
-### Supabase CLI cannot set secrets
-
-If this appears:
-
-```text
-Access token not provided.
-```
-
-Run:
-
-```powershell
-supabase login
-```
-
-Then rerun the `supabase secrets set` command.
-
-## Merge Checklist
-
-- Copy `src/pages/pptMaker/PptMakerPage.tsx`.
-- Copy `src/components/pptMaker/*`.
-- Copy `src/features/pptMaker/pptMakerSlice.ts`.
-- Copy `src/services/pptMaker.service.ts`, `pptDocument.service.ts`, and `pptExport.service.ts`.
-- Copy `src/interfaces/pptMaker.interface.ts`.
-- Copy `src/types/models/pptMaker.model.ts`.
-- Copy `src/mocks/pptMaker.mock.ts` and `pptTemplates.mock.ts`.
-- Copy `src/utils/pptMaker.ts` and `supabaseFunctionError.ts`.
-- Copy Supabase functions under `supabase/functions/`.
-- Copy migrations under `supabase/migrations/`.
-- Add route `/ppt-maker`.
-- Add reducer `pptMaker` to the Redux store.
-- Add `.env.example` keys, but never commit `.env`.

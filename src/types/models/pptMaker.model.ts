@@ -1,5 +1,17 @@
 export type TargetLanguage = 'English' | 'Korean';
 
+export type ContentDensity = 'light' | 'standard' | 'detailed';
+
+export type PresentationIntent = 'executive-proposal' | 'strategy-decision' | 'education-lecture' | 'investment-deck' | 'implementation-roadmap';
+
+export interface PresentationDesignGuide {
+  id: PresentationIntent;
+  name: string;
+  narrativeGuide: string;
+  visualGuide: string;
+  slideRules: string[];
+}
+
 export type SlideArchetype =
   | 'cover'
   | 'section-opener'
@@ -39,12 +51,55 @@ export interface SlideImageSlot {
   prompt: string;
 }
 
+export interface SlideContentBlock {
+  heading: string;
+  detail: string;
+}
+
+export interface DeckStrategy {
+  coreThesis: string;
+  audienceNeed: string;
+  desiredOutcome: string;
+  narrativeArc: Array<{
+    phase: string;
+    purpose: string;
+    slideNumbers: number[];
+  }>;
+}
+
+export interface DeckSection {
+  id: string;
+  title: string;
+  purpose: string;
+  keyMessage: string;
+  slideStart: number;
+  slideCount: number;
+  visualFocus: SlideVisualStructure[];
+}
+
+export interface PptDeckBlueprint {
+  title: string;
+  strategy: DeckStrategy;
+  sections: DeckSection[];
+  qaChecks: string[];
+}
+
 export interface StyleReference {
   id: string;
   name: string;
   notes: string;
   primaryColorLabel: string;
   accentColorLabel: string;
+  templateDesign?: TemplateDesignProfile;
+}
+
+export interface TemplateDesignProfile {
+  primaryColor: string;
+  accentColor: string;
+  primarySurfaceColor: string;
+  accentSurfaceColor: string;
+  signatureLayout: string;
+  recommendedVisualStructures: SlideVisualStructure[];
 }
 
 export type StyleSourceMode = 'template' | 'upload';
@@ -68,6 +123,14 @@ export interface PptTemplate {
   storagePath: string;
 }
 
+export interface PptPlanningBatch {
+  sectionId: string;
+  startPage: number;
+  slideCount: number;
+  totalSlides: number;
+  previousSlides?: Array<Pick<SlidePlan, 'pageNumber' | 'title' | 'mainMessage' | 'decision'>>;
+}
+
 export interface PptMakerRequest {
   sourceText: string;
   sourceDocument?: SourceDocument;
@@ -76,6 +139,13 @@ export interface PptMakerRequest {
   audience: string;
   purpose: string;
   slideCount: number;
+  contentDensity?: ContentDensity;
+  presentationIntent?: PresentationIntent;
+  coreMessage?: string;
+  requiredSections?: string;
+  presentationGuide?: PresentationDesignGuide;
+  deckBlueprint?: PptDeckBlueprint;
+  planningBatch?: PptPlanningBatch;
   styleReference: StyleReference;
   styleImageDataUrl?: string;
   styleImageUrl?: string;
@@ -91,7 +161,10 @@ export interface SlidePlan {
   mainMessage: string;
   title: string;
   subtitle: string;
+  objective: string;
   labels: string[];
+  contentBlocks: SlideContentBlock[];
+  decision: string;
   takeaway: string;
   imageSlot: SlideImageSlot;
   imagePrompt: string;
@@ -102,6 +175,8 @@ export interface PptDeckPlan {
   title: string;
   createdAt: string;
   request: PptMakerRequest;
+  strategy?: DeckStrategy;
+  blueprint?: PptDeckBlueprint;
   slides: SlidePlan[];
   copyQa: PptCopyQaResult;
 }
@@ -153,7 +228,7 @@ export interface PptDocumentEnhancement {
   fileName: string;
   pptxUrl?: string;
   resultPath?: string;
-  generationMode?: 'pptxgenjs-native' | 'pptxgenjs-native-pending' | 'claude-native' | 'claude-native-pending' | 'browser-fallback';
+  generationMode?: 'dom-to-pptx' | 'pptxgenjs-native' | 'pptxgenjs-native-pending' | 'claude-native' | 'claude-native-pending' | 'browser-fallback';
   pptxStatus?: 'processing' | 'succeeded' | 'failed';
   speakerNotes: Array<{
     pageNumber: number;
@@ -161,7 +236,7 @@ export interface PptDocumentEnhancement {
   }>;
   qaChecklist: string[];
   layouts: PptEditableSlideLayout[];
-  layoutSource: 'pptxgenjs' | 'claude' | 'fallback';
+  layoutSource: 'html-css' | 'pptxgenjs' | 'claude' | 'fallback';
 }
 
 export type PptEditableTextRole =
@@ -202,7 +277,7 @@ export interface PptEditableShape {
 }
 
 export interface PptImageLayer {
-  strategy: 'visual-crop' | 'full-slide-reference' | 'full-slide-fallback';
+  strategy: 'none' | 'visual-crop' | 'full-slide-reference' | 'full-slide-fallback';
   x: number;
   y: number;
   w: number;
@@ -228,6 +303,10 @@ export interface PptMakerFormState {
   audience: string;
   purpose: string;
   slideCount: number;
+  contentDensity: ContentDensity;
+  presentationIntent: PresentationIntent;
+  coreMessage: string;
+  requiredSections: string;
   styleNotes: string;
   styleSourceMode: StyleSourceMode;
   selectedTemplateId: string | null;

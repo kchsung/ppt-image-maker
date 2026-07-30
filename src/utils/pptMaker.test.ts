@@ -58,8 +58,15 @@ describe('pptMaker utilities', () => {
         visualStructure: 'hero-visual',
         title: 'English title',
         subtitle: 'English subtitle',
+        objective: 'Set the audience decision.',
         mainMessage: '\uD55C\uAE00 \uBB38\uAD6C\uAC00 \uC0AC\uC6A9\uB418\uC5C8\uC2B5\uB2C8\uB2E4.',
         labels: ['One', 'Two', 'Three'],
+        contentBlocks: [
+          { heading: 'One', detail: 'One detailed proof point supports the audience decision.' },
+          { heading: 'Two', detail: 'Two detailed proof points support the audience decision.' },
+          { heading: 'Three', detail: 'Three detailed proof points support the audience decision.' },
+        ],
+        decision: 'Approve the next step.',
         takeaway: 'English takeaway.',
         imageSlot: {
           id: 'visual-1',
@@ -85,8 +92,15 @@ describe('pptMaker utilities', () => {
         visualStructure: 'hero-visual',
         title: 'QLEARN for Startup',
         subtitle: 'QLEARN for Startup',
+        objective: 'QLEARN for Startup',
         mainMessage: 'QLEARN for Startup',
         labels: ['QLEARN for Startup', 'QLEARN for Startup', 'QLEARN for Startup'],
+        contentBlocks: [
+          { heading: 'QLEARN for Startup', detail: 'QLEARN for Startup' },
+          { heading: 'QLEARN for Startup', detail: 'QLEARN for Startup' },
+          { heading: 'QLEARN for Startup', detail: 'QLEARN for Startup' },
+        ],
+        decision: 'QLEARN for Startup',
         takeaway: 'QLEARN for Startup',
         imageSlot: {
           id: 'visual-1',
@@ -109,11 +123,18 @@ describe('pptMaker utilities', () => {
         pageNumber: 1,
         archetype: 'cover',
         visualStructure: 'hero-visual',
-        title: 'R&D 계획서',
-        subtitle: 'R&D 계획서',
-        mainMessage: 'R&D 계획서',
-        labels: ['R&D 계획서', 'R&D 계획서', 'R&D 계획서'],
-        takeaway: 'R&D 계획서',
+        title: 'R&D \uACC4\uD68D\uC11C',
+        subtitle: 'R&D \uACC4\uD68D\uC11C',
+        objective: 'R&D \uACC4\uD68D\uC11C',
+        mainMessage: 'R&D \uACC4\uD68D\uC11C',
+        labels: ['R&D \uACC4\uD68D\uC11C', 'R&D \uACC4\uD68D\uC11C', 'R&D \uACC4\uD68D\uC11C'],
+        contentBlocks: [
+          { heading: 'R&D \uACC4\uD68D\uC11C', detail: 'R&D \uACC4\uD68D\uC11C' },
+          { heading: 'R&D \uACC4\uD68D\uC11C', detail: 'R&D \uACC4\uD68D\uC11C' },
+          { heading: 'R&D \uACC4\uD68D\uC11C', detail: 'R&D \uACC4\uD68D\uC11C' },
+        ],
+        decision: 'R&D \uACC4\uD68D\uC11C',
+        takeaway: 'R&D \uACC4\uD68D\uC11C',
         imageSlot: {
           id: 'visual-1',
           purpose: 'Support the title with a text-free visual.',
@@ -125,5 +146,27 @@ describe('pptMaker utilities', () => {
     });
 
     expect(issues).toEqual([]);
+  });
+
+  it('reports missing fields from legacy slides without throwing', () => {
+    const legacyDeck = {
+      request: samplePptMakerRequest,
+      slides: [{
+        id: 'legacy-1',
+        pageNumber: 1,
+        archetype: 'cover',
+        visualStructure: 'hero-visual',
+        title: 'Legacy title',
+        subtitle: 'Legacy subtitle',
+        mainMessage: 'Legacy slides still need a safe quality check.',
+        labels: ['One', 'Two', 'Three'],
+        takeaway: 'Regenerate this legacy slide with a full plan.',
+        imageSlot: { id: 'legacy-visual', purpose: 'Legacy image slot', placement: 'right-hero', prompt: '' },
+        imagePrompt: '',
+      }],
+    };
+
+    expect(() => getDeckCopyQaIssues(legacyDeck as never)).not.toThrow();
+    expect(getDeckCopyQaIssues(legacyDeck as never)).toContain('Slide 1 is missing a planning objective or recommended decision.');
   });
 });

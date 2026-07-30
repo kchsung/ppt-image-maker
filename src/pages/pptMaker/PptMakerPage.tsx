@@ -1,20 +1,21 @@
 import { useState } from 'react';
-import { FileInput, Images, RotateCcw } from 'lucide-react';
+import { FileInput, PanelTop, RotateCcw } from 'lucide-react';
 import { toast } from 'sonner';
 import { PageHeader } from '@/components/common/PageHeader';
 import { GenerationProgressPanel } from '@/components/pptMaker/GenerationProgressPanel';
-import { GeneratedImageDeckPanel } from '@/components/pptMaker/GeneratedImageDeckPanel';
+import { GeneratedPptDeckPanel } from '@/components/pptMaker/GeneratedPptDeckPanel';
+import { PptDomExportDeck } from '@/components/pptMaker/PptDomExportDeck';
 import { PptMakerForm } from '@/components/pptMaker/PptMakerForm';
 import { Button } from '@/components/ui/button';
 import {
   enhanceGeneratedPptDocument,
   generateDeckPlan,
-  generateSlideImages,
+  registerPresentationJob,
   resetDeckPlan,
   updateForm,
 } from '@/features/pptMaker/pptMakerSlice';
 import { useAppDispatch, useAppSelector } from '@/hooks/redux';
-import { pptTemplates } from '@/mocks/pptTemplates.mock';
+import { getTemplateDesignProfile, pptTemplates } from '@/mocks/pptTemplates.mock';
 import { pptExportService } from '@/services/pptExport.service';
 import type { PptTemplate } from '@/types/models/pptMaker.model';
 
@@ -23,91 +24,60 @@ type PptMakerTab = 'input' | 'output';
 export function PptMakerPage() {
   const dispatch = useAppDispatch();
   const [activeTab, setActiveTab] = useState<PptMakerTab>('input');
-  const { form, deckPlan, imageDeck, documentEnhancement, status, imageStatus, documentStatus, error } = useAppSelector(
+  const { form, deckPlan, documentEnhancement, status, documentStatus, error } = useAppSelector(
     (state) => state.pptMaker,
   );
-  const isGenerating = status === 'loading' || imageStatus === 'loading' || documentStatus === 'loading';
+  const isGenerating = status === 'loading' || documentStatus === 'loading';
 
   const handleSubmit = () => {
     setActiveTab('output');
     void dispatch(generateDeckPlan(form))
       .unwrap()
-      .then((generatedDeckPlan) =>
-        dispatch(generateSlideImages(generatedDeckPlan))
-          .unwrap()
-          .then((generatedImageDeck) => ({ generatedDeckPlan, generatedImageDeck })),
-      )
-      .then(({ generatedDeckPlan, generatedImageDeck }) =>
-        dispatch(enhanceGeneratedPptDocument({ deckPlan: generatedDeckPlan, imageDeck: generatedImageDeck })).unwrap(),
-      )
-      .then((enhancement) => {
-        toast.success(
-          enhancement.pptxStatus === 'processing'
-            ? 'PPTX generation started. Check the List page when it is ready.'
-            : 'Editable PPTX generated.',
-        );
+      .then(async (generatedDeckPlan) => {
+        await dispatch(registerPresentationJob(generatedDeckPlan)).unwrap();
+        return dispatch(enhanceGeneratedPptDocument(generatedDeckPlan)).unwrap();
+      })
+      .then(() => {
+        toast.success('Editable PPTX layout is ready. Use Export PPTX to download it or generate it from the List page to save it to Supabase.');
       })
       .catch(() => toast.error('PPT generation failed.'));
   };
 
   const handleTemplateSelect = (template: PptTemplate) => {
+    const design = getTemplateDesignProfile(template.id);
     dispatch(
       updateForm({
         styleSourceMode: 'template',
         selectedTemplateId: template.id,
-        styleNotes: `Use ${template.label}: ${template.description}. Match its ${template.accentColorLabel} accent, clean white background, card flow, circular outcome area, footer, and page-number treatment.`,
+        styleNotes: `Use ${template.label}: ${template.description}. Match its ${template.accentColorLabel} accent and signature composition: ${design?.signatureLayout ?? 'clean editorial card hierarchy'}. Prefer ${design?.recommendedVisualStructures.join(', ') ?? 'varied information structures'} when they fit the message, while keeping the deck varied.`,
       }),
     );
   };
 
   const handleExportPptx = () => {
-    if (!imageDeck || !documentEnhancement) {
-      toast.error('Wait for PptxGenJS to finish the final editable PPTX.');
+    if (!deckPlan || !documentEnhancement) {
+      toast.error('Wait for the Slide JSON and layout engine to finish.');
       return;
     }
-
-    if (documentEnhancement?.pptxUrl) {
-      const link = document.createElement('a');
-      link.href = documentEnhancement.pptxUrl;
-      link.download = documentEnhancement.fileName;
-      link.rel = 'noopener';
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      return;
-    }
-
-    if (documentEnhancement.generationMode !== 'browser-fallback') {
-      toast.error('The native PPTX file is not available. Generate the document again from the List page.');
-      return;
-    }
+    const exportRoot = document.querySelector<HTMLElement>(`[data-pptx-deck="${deckPlan.id}"]`);
+    const slideElements = exportRoot ? Array.from(exportRoot.querySelectorAll<HTMLElement>('[data-pptx-slide]')) : [];
 
     void pptExportService
-      .exportImageDeck(
-        imageDeck,
+      .exportDeck(
         deckPlan,
-        documentEnhancement?.fileName ?? 'qlearn-editable-deck.pptx',
-        documentEnhancement ?? undefined,
+        documentEnhancement,
+        slideElements,
       )
       .then(() => toast.success('PPTX export started.'))
       .catch(() => toast.error('PPTX export failed.'));
-  };
-
-  const handlePreviewPptx = () => {
-    if (!documentEnhancement?.pptxUrl) {
-      return;
-    }
-
-    const viewerUrl = `https://view.officeapps.live.com/op/view.aspx?src=${encodeURIComponent(documentEnhancement.pptxUrl)}`;
-    window.open(viewerUrl, '_blank', 'noopener,noreferrer');
   };
 
   return (
     <>
       <PageHeader
         eyebrow="QLEARN Startup"
-        title="PPT Image Deck Maker"
-        description="Choose a template or upload a sample slide style, then add source text or a DOCX, PDF, or PPTX file. QLEARN will draft editable slides, generate visual assets, and assemble a PPTX output."
+        title="PPT Deck Maker"
+        description="Choose a template or upload a sample style, then add source text or a DOCX, PDF, or PPTX file. QLEARN will create a Slide JSON plan, varied layouts, and an editable PPTX output."
         actions={
           <Button
             variant="secondary"
@@ -141,9 +111,9 @@ export function PptMakerPage() {
           className="h-9 rounded-md"
           onClick={() => setActiveTab('output')}
         >
-          <Images className="h-4 w-4" />
+          <PanelTop className="h-4 w-4" />
           Output
-          {imageDeck ? <span className="ml-1 rounded-full bg-white/20 px-1.5 text-xs">{imageDeck.images.length}</span> : null}
+          {deckPlan ? <span className="ml-1 rounded-full bg-white/20 px-1.5 text-xs">{deckPlan.slides.length}</span> : null}
         </Button>
       </div>
 
@@ -161,19 +131,16 @@ export function PptMakerPage() {
           deckPlan={deckPlan}
           documentEnhancement={documentEnhancement}
           documentStatus={documentStatus}
-          imageDeck={imageDeck}
-          imageStatus={imageStatus}
           planStatus={status}
         />
       ) : (
-        <GeneratedImageDeckPanel
-          imageDeck={imageDeck}
+        <GeneratedPptDeckPanel
+          deckPlan={deckPlan}
           documentEnhancement={documentEnhancement}
-          logoImageDataUrl={deckPlan?.request.logoImageDataUrl}
           onExportPptx={handleExportPptx}
-          onPreviewPptx={handlePreviewPptx}
         />
       )}
+      {deckPlan ? <PptDomExportDeck deckPlan={deckPlan} deckId={deckPlan.id} /> : null}
     </>
   );
 }

@@ -22,7 +22,7 @@ export function GeneratedImageDeckPanel({
 }: GeneratedImageDeckPanelProps) {
   const [selectedSlideId, setSelectedSlideId] = useState<string | null>(null);
   const [expandedSlide, setExpandedSlide] = useState<GeneratedSlideImage | null>(null);
-  const canExport = Boolean(documentEnhancement?.pptxUrl || (imageDeck && documentEnhancement?.generationMode === 'browser-fallback'));
+  const canExport = Boolean(imageDeck && documentEnhancement);
   const hasNativePptx = Boolean(documentEnhancement?.pptxUrl);
   const sortedImages = useMemo(
     () => imageDeck?.images.slice().sort((left, right) => left.pageNumber - right.pageNumber) ?? [],
@@ -41,12 +41,12 @@ export function GeneratedImageDeckPanel({
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <h2 className="text-base font-bold text-primary">
-                {hasNativePptx ? 'Final editable PPTX' : 'Generated slide preview'}
+                {hasNativePptx ? 'Final editable PPTX' : 'Editable PPTX preview'}
               </h2>
               <p className="mt-1 text-sm text-text-subtle">
                 {hasNativePptx
                   ? 'Open the generated PowerPoint to review the actual editable text, shapes, and visual layers.'
-                  : 'Review generated visual references before the final PPTX is available.'}
+                  : 'Review the editable PptxGenJS layout before exporting the PowerPoint file.'}
               </p>
             </div>
             <div className="flex flex-wrap gap-2">
@@ -77,7 +77,7 @@ export function GeneratedImageDeckPanel({
               <div className="rounded-md border border-border bg-surface-muted px-4 py-3 text-sm text-text-subtle">
                 {hasNativePptx
                   ? 'The gallery below contains text-free OpenAI visual assets. The final native text and shapes are assembled by PptxGenJS; use Preview PPTX to inspect the document.'
-                  : 'The gallery below is the source-image preview used for local fallback export.'}
+                  : 'The preview combines editable PptxGenJS text and shapes with the approved text-free visual asset in each slide slot.'}
               </div>
               <figure className="overflow-hidden rounded-md border border-border bg-surface">
                 <button

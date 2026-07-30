@@ -2,161 +2,36 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { Provider } from 'react-redux';
 import { MemoryRouter } from 'react-router-dom';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { configureStore } from '@reduxjs/toolkit';
 import { pptMakerReducer } from '@/features/pptMaker/pptMakerSlice';
 import { samplePptMakerRequest } from '@/mocks/pptMaker.mock';
 import { PptAdminPage } from '@/pages/pptAdmin/PptAdminPage';
 import type { PptDeckPlan } from '@/types/models/pptMaker.model';
 
-const mocks = vi.hoisted(() => ({
-  listGenerationJobs: vi.fn(),
-  retryGenerationItem: vi.fn(),
-  savePptxOutput: vi.fn(),
-  deleteGenerationJob: vi.fn(),
-  enhancePptDocument: vi.fn(),
-  createImageDeckBlob: vi.fn(),
-}));
-
+const mocks = vi.hoisted(() => ({ listGenerationJobs: vi.fn(), savePptxOutput: vi.fn(), deleteGenerationJob: vi.fn(), enhancePptDocument: vi.fn(), createDeckBlob: vi.fn() }));
 vi.mock('@/services/pptAdmin.service', () => ({ pptAdminService: mocks }));
 vi.mock('@/services/pptDocument.service', () => ({ enhancePptDocument: mocks.enhancePptDocument }));
-vi.mock('@/services/pptExport.service', () => ({ pptExportService: { createImageDeckBlob: mocks.createImageDeckBlob } }));
+vi.mock('@/services/pptExport.service', () => ({ pptExportService: { createDeckBlob: mocks.createDeckBlob } }));
 
-const deckPlan: PptDeckPlan = {
-  id: 'native-deck',
-  title: 'Native PPTX deck',
-  createdAt: '2026-07-18T00:00:00.000Z',
-  request: samplePptMakerRequest,
-  slides: [{
-    id: 'slide-1',
-    pageNumber: 1,
-    archetype: 'cover',
-    visualStructure: 'hero-visual',
-    mainMessage: 'A clear message.',
-    title: 'Native title',
-    subtitle: 'Native subtitle',
-    labels: ['Label'],
-    takeaway: 'Native takeaway',
-    imageSlot: {
-      id: 'visual-1',
-      purpose: 'Support the title with a text-free visual.',
-      placement: 'right-hero',
-      prompt: 'Text-free abstract editorial illustration.',
-    },
-    imagePrompt: 'Prompt',
-  }],
-  copyQa: { status: 'passed', checks: ['Copy passed.'], issues: [] },
-};
+const deckPlan: PptDeckPlan = { id: 'native-deck', title: 'Native PPTX deck', createdAt: '2026-07-18T00:00:00.000Z', request: samplePptMakerRequest, slides: [{ id: 'slide-1', pageNumber: 1, archetype: 'cover', visualStructure: 'hero-visual', mainMessage: 'A clear message.', title: 'Native title', subtitle: 'Native subtitle', objective: 'Set the decision this presentation must support.', labels: ['Context', 'Evidence', 'Action'], contentBlocks: [{ heading: 'Context', detail: 'Clarify the business situation that makes this decision necessary.' }, { heading: 'Evidence', detail: 'Summarize the proof points used to guide the discussion.' }, { heading: 'Action', detail: 'Name the accountable next step after the presentation.' }], decision: 'Approve the next action and its owner.', takeaway: 'Native takeaway', imageSlot: { id: 'visual-1', purpose: 'Supporting structure.', placement: 'right-hero', prompt: 'Legacy prompt' }, imagePrompt: 'Legacy prompt' }], copyQa: { status: 'passed', checks: ['Copy passed.'], issues: [] } };
 
-describe('PptAdminPage native PPTX output', () => {
+describe('PptAdminPage editable output', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.listGenerationJobs.mockResolvedValue({
-      jobs: [{
-        id: 'native-job',
-        title: deckPlan.title,
-        status: 'succeeded',
-        progress: 100,
-        totalItems: 1,
-        completedItems: 1,
-        createdAt: '2026-07-18T00:00:00.000Z',
-        updatedAt: '2026-07-18T00:00:00.000Z',
-        errorMessage: null,
-        deckPlan,
-        resultPath: null,
-        pptxUrl: null,
-        items: [{
-          id: 'native-item',
-          pageNumber: 1,
-          status: 'succeeded',
-          outputPath: 'ppt-generations/native-job/slide-01.png',
-          imageUrl: 'https://example.com/slide-01.png',
-          errorMessage: null,
-          updatedAt: '2026-07-18T00:00:00.000Z',
-        }],
-      }],
-    });
-    mocks.enhancePptDocument.mockResolvedValue({
-      title: deckPlan.title,
-      fileName: 'native-deck.pptx',
-      pptxUrl: 'https://example.com/native-deck.pptx',
-      resultPath: 'ppt-generations/native-job/final/native-deck.pptx',
-      generationMode: 'claude-native',
-      speakerNotes: [],
-      qaChecklist: [],
-      layouts: [],
-      layoutSource: 'claude',
-    });
+    mocks.listGenerationJobs.mockResolvedValue({ jobs: [{ id: 'native-job', title: deckPlan.title, status: 'succeeded', progress: 100, totalItems: 0, completedItems: 0, createdAt: '2026-07-18T00:00:00.000Z', updatedAt: '2026-07-18T00:00:00.000Z', errorMessage: null, deckPlan, resultPath: null, pptxUrl: null, pptxStatus: 'not-started', items: [] }] });
+    mocks.enhancePptDocument.mockResolvedValue({ title: deckPlan.title, fileName: 'native-deck.pptx', generationMode: 'dom-to-pptx', speakerNotes: [], qaChecklist: [], layouts: [], layoutSource: 'html-css' });
+    mocks.createDeckBlob.mockResolvedValue(new Blob(['pptx']));
+    mocks.savePptxOutput.mockResolvedValue({ resultPath: 'ppt-generations/native-job/final/native-deck.pptx', pptxUrl: 'https://example.com/native-deck.pptx' });
   });
 
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  it('uses the Claude-native file and never rebuilds a full-slide image export', async () => {
+  it('converts the saved HTML/CSS Slide JSON deck and saves it to Supabase Storage', async () => {
     const store = configureStore({ reducer: { pptMaker: pptMakerReducer } });
     const user = userEvent.setup();
     render(<Provider store={store}><MemoryRouter><PptAdminPage /></MemoryRouter></Provider>);
-
     await user.click(await screen.findByRole('button', { name: 'Generate PPTX' }));
-
-    await waitFor(() => expect(mocks.enhancePptDocument).toHaveBeenCalledTimes(1));
-    expect(mocks.createImageDeckBlob).not.toHaveBeenCalled();
-    expect(mocks.savePptxOutput).not.toHaveBeenCalled();
-  });
-
-  it('allows an in-progress PPTX job to be restarted after confirmation', async () => {
-    const now = new Date().toISOString();
-    mocks.listGenerationJobs.mockResolvedValue({
-      jobs: [{
-        id: 'native-job',
-        title: deckPlan.title,
-        status: 'succeeded',
-        progress: 100,
-        totalItems: 1,
-        completedItems: 1,
-        createdAt: now,
-        updatedAt: now,
-        errorMessage: null,
-        deckPlan,
-        resultPath: null,
-        pptxUrl: null,
-        pptxStatus: 'processing',
-        pptxUpdatedAt: now,
-        pptxProgress: 35,
-        pptxPhase: 'Claude is rebuilding editable slides',
-        pptxExecutor: 'netlify-worker',
-        items: [{
-          id: 'native-item',
-          pageNumber: 1,
-          status: 'succeeded',
-          outputPath: 'ppt-generations/native-job/slide-01.png',
-          imageUrl: 'https://example.com/slide-01.png',
-          errorMessage: null,
-          updatedAt: now,
-        }],
-      }],
-    });
-    mocks.enhancePptDocument.mockResolvedValue({
-      title: deckPlan.title,
-      fileName: 'native-deck.pptx',
-      generationMode: 'claude-native-pending',
-      pptxStatus: 'processing',
-      speakerNotes: [],
-      qaChecklist: [],
-      layouts: [],
-      layoutSource: 'claude',
-    });
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
-
-    const store = configureStore({ reducer: { pptMaker: pptMakerReducer } });
-    const user = userEvent.setup();
-    render(<Provider store={store}><MemoryRouter><PptAdminPage /></MemoryRouter></Provider>);
-
-    const restartButton = await screen.findByRole('button', { name: 'Restart PPTX' });
-    expect(restartButton).toBeEnabled();
-    await user.click(restartButton);
-
-    await waitFor(() => expect(mocks.enhancePptDocument).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(mocks.enhancePptDocument).toHaveBeenCalledWith(deckPlan));
+    await waitFor(() => expect(mocks.createDeckBlob).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(mocks.savePptxOutput).toHaveBeenCalledWith('native-job', 'native-deck.pptx', expect.any(Blob)));
   });
 });

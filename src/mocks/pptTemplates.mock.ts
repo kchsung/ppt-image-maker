@@ -1,4 +1,4 @@
-import type { PptTemplate } from '@/types/models/pptMaker.model';
+import type { PptTemplate, TemplateDesignProfile } from '@/types/models/pptMaker.model';
 
 const baseUrl = 'https://vhktpqsxzcihwijnfaaf.supabase.co/storage/v1/object/public/ppt-templates';
 
@@ -166,3 +166,26 @@ export const pptTemplates: PptTemplate[] = [
 ];
 
 export const defaultPptTemplate = pptTemplates[0];
+
+const templateDesignProfiles: Record<string, TemplateDesignProfile> = {
+  'template-01': { primaryColor: '#40240C', accentColor: '#E98000', primarySurfaceColor: '#FFF8EC', accentSurfaceColor: '#FFF0DA', signatureLayout: 'warm industrial process cards that converge into a circular impact outcome', recommendedVisualStructures: ['hero-visual', 'numbered-process', 'hub-and-spoke', 'closing-commitment'] },
+  'template-02': { primaryColor: '#263247', accentColor: '#80C900', primarySurfaceColor: '#F5F8F4', accentSurfaceColor: '#EEF9DD', signatureLayout: 'clean growth cards with a green outcome ring and subtle line connectors', recommendedVisualStructures: ['hero-visual', 'card-grid', 'roadmap', 'closing-commitment'] },
+  'template-03': { primaryColor: '#191D73', accentColor: '#7846F4', primarySurfaceColor: '#F6F2FF', accentSurfaceColor: '#F0E9FF', signatureLayout: 'purple idea-to-AI puzzle flow with soft circular outcome treatment', recommendedVisualStructures: ['hero-visual', 'numbered-process', 'hub-and-spoke', 'closing-commitment'] },
+  'template-04': { primaryColor: '#2C2B32', accentColor: '#FF6D5E', primarySurfaceColor: '#FFF5F2', accentSurfaceColor: '#FFF0EA', signatureLayout: 'coral people-and-value story with paired human insight cards', recommendedVisualStructures: ['side-by-side-comparison', 'card-grid', 'case-story', 'closing-commitment'] },
+  'template-05': { primaryColor: '#082A73', accentColor: '#1768E8', primarySurfaceColor: '#EFF6FF', accentSurfaceColor: '#E7F1FF', signatureLayout: 'executive blue strategy-to-growth journey with a strong circular destination', recommendedVisualStructures: ['hero-visual', 'roadmap', 'metrics-dashboard', 'closing-commitment'] },
+  'template-06': { primaryColor: '#26313A', accentColor: '#98D900', primarySurfaceColor: '#F8FAF5', accentSurfaceColor: '#F1F8E3', signatureLayout: 'minimal outcome cards with restrained green highlights and centered model callout', recommendedVisualStructures: ['card-grid', 'pyramid-framework', 'metrics-dashboard', 'closing-commitment'] },
+  'template-07': { primaryColor: '#0A2D72', accentColor: '#13AAB8', primarySurfaceColor: '#F0FBFC', accentSurfaceColor: '#E9F8FF', signatureLayout: 'cyan problem-system-result sequence linked by a single continuous connector', recommendedVisualStructures: ['numbered-process', 'before-after-mapping', 'hub-and-spoke', 'closing-commitment'] },
+  'template-08': { primaryColor: '#251A75', accentColor: '#E80068', primarySurfaceColor: '#FFF3FA', accentSurfaceColor: '#F8F0FF', signatureLayout: 'energetic challenge-build-scale story with magenta focal accents', recommendedVisualStructures: ['message-emphasis', 'numbered-process', 'roadmap', 'closing-commitment'] },
+  'template-09': { primaryColor: '#0B2D66', accentColor: '#FF6411', primarySurfaceColor: '#F5F8FF', accentSurfaceColor: '#FFF5E9', signatureLayout: 'orange key-message composition with four pastel sections and a right-side conclusion', recommendedVisualStructures: ['hero-visual', 'card-grid', 'side-by-side-comparison', 'closing-commitment'] },
+  'template-10': { primaryColor: '#333A43', accentColor: '#68717D', primarySurfaceColor: '#F7F8FA', accentSurfaceColor: '#EEF0F3', signatureLayout: 'monochrome frame-evidence-decision structure with sober editorial spacing', recommendedVisualStructures: ['message-emphasis', 'side-by-side-comparison', 'metrics-dashboard', 'closing-commitment'] },
+  'template-11': { primaryColor: '#064C3C', accentColor: '#2AA879', primarySurfaceColor: '#F0FAF5', accentSurfaceColor: '#E7F8F0', signatureLayout: 'emerald insight-data-action sequence with a restrained launch outcome', recommendedVisualStructures: ['numbered-process', 'card-grid', 'hub-and-spoke', 'closing-commitment'] },
+  'template-12': { primaryColor: '#4A073F', accentColor: '#FF4D3D', primarySurfaceColor: '#FFF3F3', accentSurfaceColor: '#FFEAE6', signatureLayout: 'crimson two-column challenge-to-solution story with a decisive quote band', recommendedVisualStructures: ['side-by-side-comparison', 'before-after-mapping', 'case-story', 'closing-commitment'] },
+  'template-13': { primaryColor: '#252A34', accentColor: '#D78B00', primarySurfaceColor: '#FFF8ED', accentSurfaceColor: '#FFF0D4', signatureLayout: 'amber capability pyramid paired with connected explanation cards', recommendedVisualStructures: ['pyramid-framework', 'card-grid', 'roadmap', 'closing-commitment'] },
+  'template-14': { primaryColor: '#103CBB', accentColor: '#64D8B9', primarySurfaceColor: '#F1F7FF', accentSurfaceColor: '#E8FBF5', signatureLayout: 'blue central core linked to five strategic pillar cards', recommendedVisualStructures: ['hub-and-spoke', 'hero-visual', 'card-grid', 'closing-commitment'] },
+  'template-15': { primaryColor: '#087B2A', accentColor: '#32B64C', primarySurfaceColor: '#F1FAF2', accentSurfaceColor: '#E8F8EB', signatureLayout: 'green dashboard with KPI cards, evidence panels, and a bottom action band', recommendedVisualStructures: ['metrics-dashboard', 'card-grid', 'case-story', 'closing-commitment'] },
+  'template-16': { primaryColor: '#0A327C', accentColor: '#18A6A6', primarySurfaceColor: '#F0FBFC', accentSurfaceColor: '#E8F8F8', signatureLayout: 'teal five-step roadmap that ends in a destination outcome panel', recommendedVisualStructures: ['roadmap', 'numbered-process', 'hero-visual', 'closing-commitment'] },
+};
+
+export function getTemplateDesignProfile(templateId?: string): TemplateDesignProfile | undefined {
+  return templateId ? templateDesignProfiles[templateId] : undefined;
+}

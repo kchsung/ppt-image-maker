@@ -8,6 +8,10 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': path.resolve(__dirname, 'src'),
+      // dom-to-pptx imports opentype.js as a default export. Its ESM entry
+      // exposes named exports only, while the UMD build provides the expected
+      // CommonJS default shape for Vite's dependency transformer.
+      'opentype.js': path.resolve(__dirname, 'node_modules/opentype.js/dist/opentype.js'),
     },
   },
   test: {

@@ -32,7 +32,7 @@ export function splitIntoSlideSeeds(sourceText: string, slideCount: number): str
 
   const sentenceMatches = normalized.match(SENTENCE_PATTERN) ?? [normalized];
   const sentences = sentenceMatches.map((sentence) => sentence.trim()).filter(Boolean);
-  const safeCount = Math.max(1, Math.min(slideCount, 20));
+  const safeCount = Math.max(1, Math.min(slideCount, 100));
   const groups: string[] = Array.from({ length: safeCount }, () => '');
 
   sentences.forEach((sentence, index) => {
@@ -182,9 +182,20 @@ export function getDeckCopyQaIssues(deckPlan: Pick<PptDeckPlan, 'request' | 'sli
   const issues: string[] = [];
 
   deckPlan.slides.forEach((slide) => {
-    const fields = [slide.title, slide.subtitle, slide.mainMessage, slide.takeaway, ...slide.labels];
+    const labels = slide.labels ?? [];
+    const contentBlocks = slide.contentBlocks ?? [];
+    const fields = [
+      slide.title,
+      slide.subtitle,
+      slide.objective,
+      slide.mainMessage,
+      slide.decision,
+      slide.takeaway,
+      ...labels,
+      ...contentBlocks.flatMap((block) => [block.heading, block.detail]),
+    ];
     fields.forEach((value) => {
-      const text = value.trim();
+      const text = typeof value === 'string' ? value.trim() : '';
       if (!text) {
         issues.push(`Slide ${slide.pageNumber} contains an empty copy field.`);
         return;
@@ -202,6 +213,19 @@ export function getDeckCopyQaIssues(deckPlan: Pick<PptDeckPlan, 'request' | 'sli
         issues.push(`Slide ${slide.pageNumber} contains Korean copy while English was requested: "${text}".`);
       }
     });
+
+    if (!slide.objective || !slide.decision) {
+      issues.push(`Slide ${slide.pageNumber} is missing a planning objective or recommended decision.`);
+    }
+    if (contentBlocks.length < 3) {
+      issues.push(`Slide ${slide.pageNumber} needs at least three supporting proof points.`);
+    }
+    if (!contentBlocks.every((block) => block.heading && block.detail)) {
+      issues.push(`Slide ${slide.pageNumber} contains an incomplete supporting proof point.`);
+    }
+    if (!labels.every((label, index) => label === contentBlocks[index]?.heading)) {
+      issues.push(`Slide ${slide.pageNumber} labels must mirror the supporting proof point headings.`);
+    }
   });
 
   const structures = deckPlan.slides.map((slide) => slide.visualStructure);

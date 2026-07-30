@@ -12,6 +12,10 @@ const sampleForm: PptMakerFormState = {
   audience: samplePptMakerRequest.audience,
   purpose: samplePptMakerRequest.purpose,
   slideCount: samplePptMakerRequest.slideCount,
+  contentDensity: 'light',
+  presentationIntent: 'education-lecture',
+  coreMessage: '',
+  requiredSections: '',
   styleNotes: samplePptMakerRequest.styleReference.notes,
   styleSourceMode: 'template',
   selectedTemplateId: defaultPptTemplate.id,
@@ -31,10 +35,18 @@ describe('pptMakerSlice', () => {
       ...sampleForm,
       sourceDocument: { name: 'lecture.pdf', type: 'pdf', extractedCharacterCount: 8142 },
       creationInstructions: 'Use a practical workshop flow and include a decision slide.',
+      presentationIntent: 'executive-proposal',
+      coreMessage: 'Make verified enterprise knowledge available for accountable AI work.',
+      requiredSections: 'Current risk, operating model, rollout roadmap, expected outcome',
     });
 
     expect(request.sourceDocument).toEqual({ name: 'lecture.pdf', type: 'pdf', extractedCharacterCount: 8142 });
     expect(request.creationInstructions).toBe('Use a practical workshop flow and include a decision slide.');
+    expect(request.styleReference.templateDesign?.signatureLayout).toContain('industrial process cards');
+    expect(request.contentDensity).toBe('light');
+    expect(request.presentationGuide?.name).toBe('B2B Executive Proposal');
+    expect(request.coreMessage).toContain('verified enterprise knowledge');
+    expect(request.requiredSections).toContain('rollout roadmap');
   });
 
   it('stores generated deck plans', () => {

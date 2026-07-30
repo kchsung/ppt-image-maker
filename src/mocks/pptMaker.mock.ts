@@ -220,11 +220,11 @@ export function createMockDeckPlan(
   options: { id?: string; createdAt?: string } = {},
 ): PptDeckPlan {
   const copies = request.targetLanguage === 'Korean' ? readableKoreanSlideCopies : englishSlideCopies;
-  const count = Math.max(3, Math.min(request.slideCount, copies.length));
+  const count = Math.max(3, Math.min(request.slideCount, 100));
   const createdAt = options.createdAt ?? new Date().toISOString();
   const slides = Array.from({ length: count }, (_, index) => {
     const pageNumber = index + 1;
-    const copy = copies[index];
+    const copy = copies[index % copies.length];
     const archetype = getMockArchetype(pageNumber, count);
     const visualStructure = getMockVisualStructure(pageNumber, count, archetype);
 
@@ -234,6 +234,22 @@ export function createMockDeckPlan(
       archetype,
       visualStructure,
       ...copy,
+      objective: request.targetLanguage === 'Korean'
+        ? `${copy.labels[0] ?? '우선과제'}에 대한 핵심 판단과 실행 방향을 명확히 합의합니다.`
+        : `Help the audience understand and act on ${copy.labels[0] ?? 'the priority'}.`,
+      contentBlocks: copy.labels.map((heading, blockIndex) => ({
+        heading,
+        detail: request.targetLanguage === 'Korean'
+          ? blockIndex === 0
+            ? `${heading}이 이 장표에서 시작해야 할 핵심 근거를 설명합니다.`
+            : `${heading}은 주요 메시지를 뒷받침하는 실행 근거를 제공합니다.`
+          : blockIndex === 0
+            ? `${heading} explains the critical starting point for this slide.`
+            : `${heading} provides a practical proof point that supports the main message.`,
+      })),
+      decision: request.targetLanguage === 'Korean'
+        ? `${copy.labels[0] ?? '우선과제'}에 대한 다음 실행과 책임 주체를 합의합니다.`
+        : `Agree the next action for ${copy.labels[0] ?? 'this priority'}.`,
       imageSlot: {
         id: `visual-${pageNumber}`,
         purpose: 'A decorative visual asset that supports the editable slide message.',
@@ -249,6 +265,22 @@ export function createMockDeckPlan(
     title: request.targetLanguage === 'Korean' ? 'AI 판단과 실행' : 'AI-Ready Judgment And Execution',
     createdAt,
     request: { ...request, slideCount: count },
+    strategy: {
+      coreThesis: request.targetLanguage === 'Korean'
+        ? 'AI를 활용한 업무는 빠른 초안보다 검증 가능한 판단 체계를 갖출 때 가치가 커집니다.'
+        : 'AI creates durable value when teams turn generated output into evidence-backed decisions.',
+      audienceNeed: request.targetLanguage === 'Korean'
+        ? '실행 속도와 결과의 신뢰도를 함께 높일 수 있는 실무 구조가 필요합니다.'
+        : 'The audience needs a practical way to improve both execution speed and decision confidence.',
+      desiredOutcome: request.targetLanguage === 'Korean'
+        ? '발표 후 바로 실행할 수 있는 우선 과제와 책임 체계를 합의합니다.'
+        : 'The deck aligns the audience on a concrete priority, owner, and next action.',
+      narrativeArc: [
+        { phase: 'Context', purpose: 'Frame the opportunity and the decision to make.', slideNumbers: [1] },
+        { phase: 'Evidence', purpose: 'Build the case with clear proof points and trade-offs.', slideNumbers: Array.from({ length: Math.max(0, count - 2) }, (_, index) => index + 2) },
+        { phase: 'Action', purpose: 'Close with an accountable next step.', slideNumbers: [count] },
+      ],
+    },
     slides,
     copyQa: {
       status: 'passed',

@@ -21,7 +21,7 @@ describe('PptMakerPage', () => {
       screen.getByLabelText('Source text'),
       'AI changes execution. Human judgment still matters. Teams need workflows. Validation creates trust.',
     );
-    await user.click(screen.getByRole('button', { name: /generate ppt images/i }));
-    expect(await screen.findByAltText('PPT preview slide 1')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /create ppt deck/i }));
+    expect(await screen.findByText('Editable PPTX preview')).toBeInTheDocument();
   });
 });

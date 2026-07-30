@@ -4,6 +4,7 @@ import type {
   GeneratedImageDeck,
   GeneratedSlideImage,
   GenerationJob,
+  PptDeckBlueprint,
   PptDeckPlan,
   PptMakerRequest,
   SlidePlan,
@@ -21,6 +22,9 @@ import {
   validateSlideText,
 } from '@/utils/pptMaker';
 import { getSupabaseFunctionErrorMessage } from '@/utils/supabaseFunctionError';
+import { mapWithConcurrency } from '@/utils/concurrency';
+
+const SECTION_PLAN_CONCURRENCY = 2;
 
 function createImagePrompt(request: PptMakerRequest, slide: Omit<SlidePlan, 'imagePrompt'>): string {
   return [
@@ -44,36 +48,52 @@ function createImagePrompt(request: PptMakerRequest, slide: Omit<SlidePlan, 'ima
 export const pptMakerService: PptMakerService = {
   async generateDeckPlan(request) {
     if (supabase) {
-      const { data, error } = await supabase.functions.invoke<PptDeckPlan>('generate-ppt-slide-plan', {
-        body: { request },
-      });
+      const blueprint = await generateDeckBlueprint(request);
+      const sectionPlans = await mapWithConcurrency(
+        blueprint.sections,
+        SECTION_PLAN_CONCURRENCY,
+        async (section, sectionIndex) => {
+          const sectionRequest: PptMakerRequest = {
+            ...request,
+            deckBlueprint: blueprint,
+            planningBatch: {
+              sectionId: section.id,
+              startPage: section.slideStart,
+              slideCount: section.slideCount,
+              totalSlides: request.slideCount,
+              previousSlides: createBlueprintHandoff(blueprint, sectionIndex),
+            },
+          };
+          return generateSectionPlan(sectionRequest, section.title);
+        },
+      );
+      const slides = sectionPlans.flatMap((sectionPlan) => sectionPlan.slides);
 
-      if (error) {
-        throw new Error(`Slide copy planning failed: ${await getSupabaseFunctionErrorMessage(error)}`);
-      }
-
-      if (!data) {
-        throw new Error('Slide copy planning returned no deck plan.');
-      }
-
-      const plan = {
-        ...data,
-        id: data.id || `deck-${Date.now()}`,
-        createdAt: data.createdAt || new Date().toISOString(),
+      const plan: PptDeckPlan = {
+        id: `deck-${Date.now()}`,
+        title: blueprint.title,
+        createdAt: new Date().toISOString(),
         request,
-      } satisfies PptDeckPlan;
+        strategy: blueprint.strategy,
+        blueprint,
+        slides: slides.sort((left, right) => left.pageNumber - right.pageNumber),
+        copyQa: {
+          status: 'passed',
+          checks: [
+            ...blueprint.qaChecks,
+            `Generated ${blueprint.sections.length} independently planned sections with a maximum of ${SECTION_PLAN_CONCURRENCY} concurrent planning calls.`,
+            'Section plans were assembled in page order and checked again as one complete deck.',
+          ],
+          issues: [],
+        },
+      };
+
       const issues = getDeckCopyQaIssues(plan);
-      if (issues.length > 0 || plan.copyQa.status !== 'passed') {
-        throw new Error(issues[0] ?? plan.copyQa.issues[0] ?? 'Slide copy did not pass quality validation.');
+      if (issues.length > 0) {
+        throw new Error(issues[0]);
       }
 
-      return {
-        ...plan,
-        slides: plan.slides.map((slide) => ({
-          ...slide,
-          imagePrompt: createImagePrompt(request, slide),
-        })),
-      };
+      return plan;
     }
 
     return createLocalDemoDeckPlan(request);
@@ -85,7 +105,7 @@ export const pptMakerService: PptMakerService = {
     }
 
     const { data, error } = await supabase.functions.invoke<GenerationJob>('create-ppt-generation-job', {
-      body: { deckPlan },
+      body: { deckPlan, layoutOnly: true },
     });
 
     if (error) {
@@ -129,6 +149,57 @@ export const pptMakerService: PptMakerService = {
   },
 };
 
+async function generateDeckBlueprint(request: PptMakerRequest): Promise<PptDeckBlueprint> {
+  if (!supabase) throw new Error('Supabase is not configured.');
+  const { data, error } = await supabase.functions.invoke<PptDeckBlueprint>('generate-ppt-deck-blueprint', {
+    body: { request },
+  });
+  if (error) {
+    throw new Error(`Deck blueprint planning failed: ${await getSupabaseFunctionErrorMessage(error)}`);
+  }
+  if (!data || data.sections.length === 0) {
+    throw new Error('Deck blueprint planning returned no presentation sections.');
+  }
+  return data;
+}
+
+function createBlueprintHandoff(blueprint: PptDeckBlueprint, sectionIndex: number) {
+  return blueprint.sections
+    .slice(Math.max(0, sectionIndex - 2), sectionIndex)
+    .map((section) => ({
+      pageNumber: section.slideStart + section.slideCount - 1,
+      title: section.title,
+      mainMessage: section.keyMessage,
+      decision: section.purpose,
+    }));
+}
+
+async function generateSectionPlan(request: PptMakerRequest, sectionTitle: string): Promise<PptDeckPlan> {
+  if (!supabase) throw new Error('Supabase is not configured.');
+  const { data, error } = await supabase.functions.invoke<PptDeckPlan>('generate-ppt-slide-plan', {
+    body: { request },
+  });
+
+  if (error) {
+    throw new Error(`Slide copy planning failed for section "${sectionTitle}": ${await getSupabaseFunctionErrorMessage(error)}`);
+  }
+
+  if (!data) {
+    throw new Error(`Slide copy planning returned no slides for section "${sectionTitle}".`);
+  }
+  const plan = {
+    ...data,
+    id: data.id || `section-${request.planningBatch?.sectionId ?? Date.now()}`,
+    createdAt: data.createdAt || new Date().toISOString(),
+    request,
+  } satisfies PptDeckPlan;
+  const issues = getDeckCopyQaIssues(plan);
+  if (issues.length > 0 || plan.copyQa.status !== 'passed') {
+    throw new Error(issues[0] ?? plan.copyQa.issues[0] ?? `Slide copy did not pass quality validation for section "${sectionTitle}".`);
+  }
+  return plan;
+}
+
 async function generateSlideWithRateLimitRetry(
   deckPlan: PptDeckPlan,
   slide: SlidePlan,
@@ -170,13 +241,7 @@ function createLocalDemoDeckPlan(request: PptMakerRequest): PptDeckPlan {
     createdAt: new Date().toISOString(),
   });
 
-  return {
-    ...plan,
-    slides: plan.slides.map((slide) => ({
-      ...slide,
-      imagePrompt: createImagePrompt(request, slide),
-    })),
-  };
+  return plan;
 }
 
 function createLegacyLocalDemoDeckPlan(request: PptMakerRequest): PptDeckPlan {
@@ -209,6 +274,18 @@ function createLegacyLocalDemoDeckPlan(request: PptMakerRequest): PptDeckPlan {
         title,
         subtitle: validateSlideText(subtitle, request.targetLanguage),
         labels,
+        objective: request.targetLanguage === 'Korean'
+          ? '청중이 이 장표에서 이해하고 결정해야 할 우선과제를 명확히 정의합니다.'
+          : 'Define the priority the audience should understand and decide from this slide.',
+        contentBlocks: labels.map((heading) => ({
+          heading,
+          detail: request.targetLanguage === 'Korean'
+            ? `${heading}을 통해 핵심 근거와 실행 방향을 구체화합니다.`
+            : `${heading} explains the evidence and practical implication for the audience.`,
+        })),
+        decision: request.targetLanguage === 'Korean'
+          ? '다음 실행 과제와 책임 주체를 합의합니다.'
+          : 'Agree the next action and accountable owner.',
         takeaway: validateSlideText(takeaway, request.targetLanguage),
         imageSlot: {
           id: `visual-${pageNumber}`,
