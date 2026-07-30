@@ -249,6 +249,45 @@ export function getDeckCopyQaIssues(
   return Array.from(new Set(issues));
 }
 
+export function getDeckAssemblyQaIssues(
+  deckPlan: Pick<PptDeckPlan, 'request' | 'slides' | 'blueprint'>,
+): string[] {
+  const issues: string[] = [];
+  const expectedSlideCount = deckPlan.request.slideCount;
+  const slides = [...deckPlan.slides].sort((left, right) => left.pageNumber - right.pageNumber);
+
+  if (slides.length !== expectedSlideCount) {
+    issues.push(`Deck assembly expected ${expectedSlideCount} slides but received ${slides.length}.`);
+  }
+
+  Array.from({ length: expectedSlideCount }, (_, index) => index + 1).forEach((pageNumber, index) => {
+    if (slides[index]?.pageNumber !== pageNumber) {
+      issues.push(`Deck assembly requires page ${pageNumber} exactly once and in order.`);
+    }
+  });
+
+  if (slides[0]?.visualStructure !== 'hero-visual') {
+    issues.push('Deck assembly requires slide 1 to use hero-visual.');
+  }
+  if (expectedSlideCount > 1 && slides.at(-1)?.visualStructure !== 'closing-commitment') {
+    issues.push(`Deck assembly requires slide ${expectedSlideCount} to use closing-commitment.`);
+  }
+
+  deckPlan.blueprint?.sections.forEach((section) => {
+    const sectionSlides = slides.filter((slide) =>
+      slide.pageNumber >= section.slideStart && slide.pageNumber < section.slideStart + section.slideCount
+    );
+    if (sectionSlides.length !== section.slideCount) {
+      issues.push(`Section "${section.title}" is missing one or more planned pages.`);
+    }
+    if (section.visualFocus.length > 0 && !sectionSlides.some((slide) => section.visualFocus.includes(slide.visualStructure))) {
+      issues.push(`Section "${section.title}" does not apply its Blueprint visual direction.`);
+    }
+  });
+
+  return Array.from(new Set(issues));
+}
+
 function hasUnapprovedLatinCopy(value: string): boolean {
   const withoutApprovedBrandNames = value
     .replace(/\bQLEARN\s+for\s+Startup\b/giu, 'QLEARN')

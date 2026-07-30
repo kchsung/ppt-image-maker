@@ -392,16 +392,16 @@ function ensurePlanDiversity(plan: DraftPlan, request: PptMakerRequest): DraftPl
   return {
     ...plan,
     slides: plan.slides.map((slide, index) => {
-    const globalIndex = batchStartPage - 1 + index;
-    const visualStructure = getRequiredVisualStructure(globalIndex, totalSlides);
-    const archetype = getArchetypeForStructure(visualStructure, totalSlides, globalIndex);
+      const globalIndex = batchStartPage - 1 + index;
+      const visualStructure = getRequiredVisualStructure(globalIndex, totalSlides, request);
+      const archetype = getArchetypeForStructure(visualStructure, totalSlides, globalIndex);
 
-    return {
-      ...slide,
-      pageNumber: batchStartPage + index,
-      archetype,
-      visualStructure,
-    };
+      return {
+        ...slide,
+        pageNumber: batchStartPage + index,
+        archetype,
+        visualStructure,
+      };
     }),
   };
 }
@@ -409,9 +409,14 @@ function ensurePlanDiversity(plan: DraftPlan, request: PptMakerRequest): DraftPl
 function getRequiredVisualStructure(
   index: number,
   totalSlides: number,
+  request: PptMakerRequest,
 ): SlideVisualStructure {
   if (index === 0) return 'hero-visual';
   if (totalSlides > 1 && index === totalSlides - 1) return 'closing-commitment';
+
+  const previousStructure = getRequiredVisualStructure(index - 1, totalSlides, request);
+  const preferredStructure = getBlueprintVisualPreference(index, request);
+  if (preferredStructure && preferredStructure !== previousStructure) return preferredStructure;
 
   const middleStructures: SlideVisualStructure[] = [
     'message-emphasis',
@@ -425,7 +430,25 @@ function getRequiredVisualStructure(
     'case-story',
     'before-after-mapping',
   ];
-  return middleStructures[(index - 1) % middleStructures.length];
+  const defaultStructure = middleStructures[(index - 1) % middleStructures.length];
+  if (defaultStructure !== previousStructure) return defaultStructure;
+
+  return middleStructures.find((structure) => structure !== previousStructure) ?? 'card-grid';
+}
+
+function getBlueprintVisualPreference(index: number, request: PptMakerRequest): SlideVisualStructure | null {
+  const pageNumber = index + 1;
+  const section = request.deckBlueprint?.sections.find((entry) =>
+    pageNumber >= entry.slideStart && pageNumber < entry.slideStart + entry.slideCount
+  );
+  if (!section) return null;
+
+  const localIndex = pageNumber - section.slideStart;
+  const preferredStructure = section.visualFocus[localIndex];
+  if (!preferredStructure || preferredStructure === 'hero-visual' || preferredStructure === 'closing-commitment') {
+    return null;
+  }
+  return preferredStructure;
 }
 
 function getArchetypeForStructure(

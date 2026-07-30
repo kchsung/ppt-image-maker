@@ -1,13 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import {
   createSlideTitle,
+  getDeckAssemblyQaIssues,
   extractKeywords,
   getDeckCopyQaIssues,
   selectVisualStructure,
   splitIntoSlideSeeds,
   summarizeText,
 } from '@/utils/pptMaker';
-import { samplePptMakerRequest } from '@/mocks/pptMaker.mock';
+import { createMockDeckPlan, samplePptMakerRequest } from '@/mocks/pptMaker.mock';
 
 describe('pptMaker utilities', () => {
   it('splits source text into the requested number of slide seeds', () => {
@@ -168,5 +169,30 @@ describe('pptMaker utilities', () => {
 
     expect(() => getDeckCopyQaIssues(legacyDeck as never)).not.toThrow();
     expect(getDeckCopyQaIssues(legacyDeck as never)).toContain('Slide 1 is missing a planning objective or recommended decision.');
+  });
+
+  it('rejects a broken assembled deck before layout rendering', () => {
+    const deck = createMockDeckPlan({ ...samplePptMakerRequest, slideCount: 4 });
+    const issues = getDeckAssemblyQaIssues({
+      ...deck,
+      slides: deck.slides.map((slide) => slide.pageNumber === 3 ? { ...slide, pageNumber: 2 } : slide),
+      blueprint: {
+        title: deck.title,
+        strategy: deck.strategy!,
+        qaChecks: [],
+        sections: [{
+          id: 'decision-context',
+          title: 'Decision context',
+          purpose: 'Establish the operating decision.',
+          keyMessage: 'Evidence needs a clear decision owner.',
+          slideStart: 1,
+          slideCount: 4,
+          visualFocus: ['roadmap'],
+        }],
+      },
+    });
+
+    expect(issues).toContain('Deck assembly requires page 3 exactly once and in order.');
+    expect(issues).toContain('Section "Decision context" does not apply its Blueprint visual direction.');
   });
 });

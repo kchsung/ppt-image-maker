@@ -12,6 +12,7 @@ import type {
 import { createMockDeckPlan, createMockSlideImageDataUrl } from '@/mocks/pptMaker.mock';
 import {
   createSlideTitle,
+  getDeckAssemblyQaIssues,
   extractKeywords,
   getDeckCopyQaIssues,
   getVisualStructureDescription,
@@ -88,7 +89,7 @@ export const pptMakerService: PptMakerService = {
         },
       };
 
-      const issues = getDeckCopyQaIssues(plan);
+      const issues = [...getDeckAssemblyQaIssues(plan), ...getDeckCopyQaIssues(plan)];
       if (issues.length > 0) {
         throw new Error(issues[0]);
       }

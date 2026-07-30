@@ -268,6 +268,36 @@ describe('generate-ppt-slide-plan Edge Function', () => {
     expect(body.strategy).toEqual(validStrategy());
   });
 
+  it('applies a section visual focus while preserving a varied local sequence', async () => {
+    const batchRequest = {
+      request: {
+        ...requestBody.request,
+        slideCount: 20,
+        deckBlueprint: {
+          title: 'Long-form executive deck',
+          strategy: validStrategy(),
+          sections: [
+            { id: 'model', title: 'Operating model', purpose: 'Explain the model.', keyMessage: 'A governed workflow makes knowledge usable.', slideStart: 11, slideCount: 5, visualFocus: ['hub-and-spoke', 'roadmap', 'metrics-dashboard'] },
+          ],
+        },
+        planningBatch: { sectionId: 'model', startPage: 11, slideCount: 5, totalSlides: 20 },
+      },
+    };
+    fetchMock.mockResolvedValue(response(Array.from({ length: 5 }, (_, index) => validSlide({
+      pageNumber: index + 1,
+      title: `Operating model ${index + 1}`,
+      visualStructure: 'card-grid',
+    }))));
+
+    const result = await handler!(new Request('http://localhost', { method: 'POST', body: JSON.stringify(batchRequest) }));
+    const body = await result.json();
+    const structures = body.slides.map((slide: { visualStructure: string }) => slide.visualStructure);
+
+    expect(result.status).toBe(200);
+    expect(structures).toEqual(expect.arrayContaining(['hub-and-spoke', 'roadmap', 'metrics-dashboard']));
+    expect(new Set(structures).size).toBeGreaterThanOrEqual(4);
+  });
+
   it('allows standard uppercase abbreviations in Korean slide copy', async () => {
     const koreanRequest = {
       request: { ...requestBody.request, targetLanguage: 'Korean' as const },
