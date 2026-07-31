@@ -1,5 +1,7 @@
 # PPT Maker Implementation Notes
 
+> 한국어 적용 요약과 품질 기준은 [PPT 구성 및 품질 적용 현황](./ppt-quality-implementation.md)을 참고하세요.
+
 ## Current flow
 
 `/ppt-maker` creates editable presentations without a slide-image generation step:
