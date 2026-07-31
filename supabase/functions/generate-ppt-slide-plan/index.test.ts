@@ -56,7 +56,7 @@ async function loadHandler() {
   handler = null;
   vi.resetModules();
   vi.stubGlobal('fetch', fetchMock);
-  vi.stubGlobal('Deno', { env: { get: (key: string) => key === 'OPENAI_API_KEY' ? 'test-key' : 'gpt-4o' }, serve: (next: Handler) => { handler = next; } });
+  vi.stubGlobal('Deno', { env: { get: (key: string) => key === 'OPENAI_API_KEY' ? 'test-key' : undefined }, serve: (next: Handler) => { handler = next; } });
   await import('./index.ts');
   if (!handler) throw new Error('The Edge Function handler was not registered.');
 }
@@ -81,6 +81,8 @@ describe('generate-ppt-slide-plan Edge Function', () => {
     });
     expect(body.slides[0].imagePrompt).toBe('');
     expect(body.copyQa.status).toBe('passed');
+    const openAiRequest = JSON.parse(fetchMock.mock.calls[0][1].body) as { model: string };
+    expect(openAiRequest.model).toBe('gpt-5');
   });
 
   it('converts a topic-only slide title into a conclusion headline before returning the plan', async () => {
@@ -205,6 +207,20 @@ describe('generate-ppt-slide-plan Edge Function', () => {
       .mockResolvedValueOnce(new Response('<!DOCTYPE html><html><body>Temporary gateway error</body></html>', {
         status: 502,
         headers: { 'Content-Type': 'text/html' },
+      }))
+      .mockResolvedValueOnce(response([validSlide()]));
+
+    const result = await handler!(new Request('http://localhost', { method: 'POST', body: JSON.stringify(requestBody) }));
+
+    expect(result.status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('honors a provider rate-limit response and retries the planner request', async () => {
+    fetchMock
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: { message: 'Rate limit reached. Please try again in 0s.' } }), {
+        status: 429,
+        headers: { 'Content-Type': 'application/json', 'Retry-After': '0' },
       }))
       .mockResolvedValueOnce(response([validSlide()]));
 

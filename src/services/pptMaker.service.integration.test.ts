@@ -117,7 +117,7 @@ describe('pptMakerService remote planning scenario', () => {
     vi.resetModules();
   });
 
-  it('assembles a 30-slide deck from two concurrent, Blueprint-aligned section requests', async () => {
+  it('serializes a rate-sensitive 30-slide deck while preserving Blueprint-aligned section requests', async () => {
     const blueprint = createBlueprint(30);
     let activeSectionRequests = 0;
     let maximumActiveSectionRequests = 0;
@@ -146,7 +146,7 @@ describe('pptMakerService remote planning scenario', () => {
 
     expect(invoke.mock.calls.filter(([name]) => name === 'generate-ppt-deck-blueprint')).toHaveLength(1);
     expect(sectionRequests).toHaveLength(3);
-    expect(maximumActiveSectionRequests).toBe(2);
+    expect(maximumActiveSectionRequests).toBe(1);
     expect(sectionRequests.map((request) => request.planningBatch?.slideCount)).toEqual([10, 10, 10]);
     expect(sectionRequests.find((request) => request.planningBatch?.sectionId === 'section-3')?.planningBatch?.previousSlides)
       .toMatchObject([{ pageNumber: 10 }, { pageNumber: 20 }]);
@@ -202,7 +202,7 @@ describe('pptMakerService remote planning scenario', () => {
       .rejects.toThrow('Deck assembly requires page 11 exactly once and in order.');
   });
 
-  it('keeps a 100-slide request bounded to ten section calls and two active planners', async () => {
+  it('keeps a 100-slide request bounded to ten sequential section calls to protect the OpenAI token budget', async () => {
     const blueprint = createBlueprint(100);
     let activeSectionRequests = 0;
     let maximumActiveSectionRequests = 0;
@@ -222,7 +222,7 @@ describe('pptMakerService remote planning scenario', () => {
     const deck = await pptMakerService.generateDeckPlan({ ...samplePptMakerRequest, slideCount: 100 });
 
     expect(invoke.mock.calls.filter(([name]) => name === 'generate-ppt-slide-plan')).toHaveLength(10);
-    expect(maximumActiveSectionRequests).toBe(2);
+    expect(maximumActiveSectionRequests).toBe(1);
     expect(deck.slides).toHaveLength(100);
     expect(deck.slides.at(-1)?.pageNumber).toBe(100);
     expect(deck.slides.at(-1)?.visualStructure).toBe('closing-commitment');

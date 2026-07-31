@@ -9,7 +9,7 @@ async function loadHandler() {
   vi.resetModules();
   vi.stubGlobal('fetch', fetchMock);
   vi.stubGlobal('Deno', {
-    env: { get: (key: string) => key === 'OPENAI_API_KEY' ? 'test-key' : 'gpt-4o' },
+    env: { get: (key: string) => key === 'OPENAI_API_KEY' ? 'test-key' : undefined },
     serve: (next: Handler) => { handler = next; },
   });
   await import('./index.ts');
@@ -39,6 +39,32 @@ describe('analyze-ppt-request Edge Function', () => {
     expect(body.slideCount).toBe(17);
     expect(body.presentationDurationMinutes).toBe(30);
     expect(body.documentType).toBe('proposal');
+  });
+
+  it('reads structured analysis text from a nested Responses API content value', async () => {
+    const analysis = {
+      topic: 'Trusted AI Knowledge Foundation', purpose: 'Approve a governed AI pilot', audience: 'Executive sponsors',
+      presentationDurationMinutes: 30, slideCount: 17, documentType: 'proposal', presentationIntent: 'executive-proposal',
+      contentDensity: 'standard', coreMessage: 'Trusted knowledge makes AI adoption accountable.',
+      requiredSections: 'Challenge, model, proof, rollout, decision', rationale: ['The source is a decision proposal.', 'Thirty minutes supports seventeen standard-detail slides.'],
+      sourceMaterialAnalysis: { summary: 'The source supports a governed pilot.', keyPoints: ['Governed pilot'], dataPoints: [], availableVisuals: [] },
+      clarifyingQuestions: [],
+    };
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({
+      output: [{ type: 'message', content: [{ type: 'output_text', text: { value: JSON.stringify(analysis) } }] }],
+    }), { status: 200 }));
+
+    const result = await handler!(new Request('http://localhost', { method: 'POST', body: JSON.stringify({ request: {
+      sourceText: 'Executive sponsors need a governed AI knowledge pilot.', targetLanguage: 'English', slideCount: 12,
+    } }) }));
+    const body = await result.json();
+
+    expect(result.status).toBe(200);
+    expect(body.topic).toBe('Trusted AI Knowledge Foundation');
+    const requestBody = JSON.parse(fetchMock.mock.calls[0][1].body) as { model: string; reasoning: { effort: string }; max_output_tokens: number };
+    expect(requestBody.model).toBe('gpt-5');
+    expect(requestBody.reasoning).toEqual({ effort: 'low' });
+    expect(requestBody.max_output_tokens).toBe(5000);
   });
 
   it('adds a required duration selection when the model cannot identify a presentation length', async () => {

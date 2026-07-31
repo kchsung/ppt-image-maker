@@ -49,7 +49,7 @@ async function loadHandler() {
   vi.resetModules();
   vi.stubGlobal('fetch', fetchMock);
   vi.stubGlobal('Deno', {
-    env: { get: (key: string) => key === 'OPENAI_API_KEY' ? 'test-key' : 'gpt-4o' },
+    env: { get: (key: string) => key === 'OPENAI_API_KEY' ? 'test-key' : undefined },
     serve: (next: Handler) => { handler = next; },
   });
   await import('./index.ts');

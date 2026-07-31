@@ -1,4 +1,5 @@
 type TargetLanguage = 'English' | 'Korean';
+import { DEFAULT_PPT_PLAN_MODEL, fetchOpenAiWithRetry } from '../_shared/openaiRetry.ts';
 type ContentDensity = 'light' | 'standard' | 'detailed';
 type SlideArchetype = 'cover' | 'section-opener' | 'card-grid' | 'comparison' | 'process' | 'before-after' | 'case-dashboard' | 'closing';
 type SlideRole = 'opening' | 'context' | 'problem-framing' | 'evidence' | 'comparison' | 'solution' | 'implementation' | 'case-study' | 'decision' | 'conclusion';
@@ -207,7 +208,7 @@ Deno.serve(async (req) => {
     const apiKey = Deno.env.get('OPENAI_API_KEY');
     if (!apiKey) return json({ error: 'OPENAI_API_KEY is not configured.' }, 500);
 
-    const model = Deno.env.get('OPENAI_PPT_PLAN_MODEL') ?? 'gpt-4o';
+    const model = Deno.env.get('OPENAI_PPT_PLAN_MODEL') ?? DEFAULT_PPT_PLAN_MODEL;
     let plan = await expandPlanToRequestedSlideCount(apiKey, model, request, await requestPlan(apiKey, model, request));
     plan = ensurePlanDiversity(plan, request);
     let issues = validatePlan(plan, request);
@@ -329,6 +330,7 @@ async function requestPlan(
   });
   const requestBody = JSON.stringify({
     model,
+    reasoning: { effort: 'low' },
     max_output_tokens: 16384,
     input: [{ role: 'user', content: [{ type: 'input_text', text: prompt }] }],
     text: {
@@ -341,32 +343,21 @@ async function requestPlan(
     },
   });
 
-  let lastError: Error | null = null;
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      const response = await fetch('https://api.openai.com/v1/responses', {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-        body: requestBody,
-      });
-      const rawPayload = await response.text();
-      const payload = parseOpenAiResponse(rawPayload, response.status);
-      if (!response.ok) {
-        throw new Error(payload.error?.message ?? `OpenAI slide copy planning failed (HTTP ${response.status}).`);
-      }
-
-      const output = extractResponseText(payload);
-      if (!output) throw new Error('OpenAI slide copy planning did not include text output.');
-      if (output.trimStart().startsWith('<')) throw new Error('OpenAI returned HTML instead of Slide JSON.');
-      return parsePlan(output);
-    } catch (error) {
-      lastError = error instanceof Error ? error : new Error('OpenAI slide copy planning failed.');
-      if (attempt === 0 && isTransientOpenAiPlanError(lastError)) continue;
-      throw lastError;
-    }
+  const response = await fetchOpenAiWithRetry('https://api.openai.com/v1/responses', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+    body: requestBody,
+  });
+  const rawPayload = await response.text();
+  const payload = parseOpenAiResponse(rawPayload, response.status);
+  if (!response.ok) {
+    throw new Error(payload.error?.message ?? `OpenAI slide copy planning failed (HTTP ${response.status}).`);
   }
 
-  throw lastError ?? new Error('OpenAI slide copy planning failed.');
+  const output = extractResponseText(payload);
+  if (!output) throw new Error('OpenAI slide copy planning did not include text output.');
+  if (output.trimStart().startsWith('<')) throw new Error('OpenAI returned HTML instead of Slide JSON.');
+  return parsePlan(output);
 }
 
 function parseOpenAiResponse(rawPayload: string, status: number): Record<string, unknown> & { error?: { message?: string } } {
@@ -375,10 +366,6 @@ function parseOpenAiResponse(rawPayload: string, status: number): Record<string,
   } catch {
     throw new Error(`OpenAI returned a non-JSON response (HTTP ${status}). Please retry the slide plan.`);
   }
-}
-
-function isTransientOpenAiPlanError(error: Error): boolean {
-  return /non-JSON response|returned HTML instead of Slide JSON|fetch failed|HTTP (?:408|429|500|502|503|504)/iu.test(error.message);
 }
 
 async function expandPlanToRequestedSlideCount(
@@ -1533,7 +1520,15 @@ function extractResponseText(payload: Record<string, unknown>): string | null {
   for (const item of output) {
     if (!isRecord(item) || !Array.isArray(item.content)) continue;
     for (const content of item.content) {
-      if (isRecord(content) && typeof content.text === 'string' && content.text.trim()) return content.text;
+      if (!isRecord(content)) continue;
+      const directText = text(content.text);
+      if (directText) return directText;
+      const nestedText = isRecord(content.text) ? text(content.text.value) : '';
+      if (nestedText) return nestedText;
+      const outputText = text(content.output_text);
+      if (outputText) return outputText;
+      const nestedOutputText = isRecord(content.output_text) ? text(content.output_text.value) : '';
+      if (nestedOutputText) return nestedOutputText;
     }
   }
   return null;

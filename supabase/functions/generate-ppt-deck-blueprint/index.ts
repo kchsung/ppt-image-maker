@@ -1,4 +1,5 @@
 type TargetLanguage = 'English' | 'Korean';
+import { DEFAULT_PPT_PLAN_MODEL, fetchOpenAiWithRetry } from '../_shared/openaiRetry.ts';
 type SlideVisualStructure =
   | 'hero-visual'
   | 'message-emphasis'
@@ -90,7 +91,7 @@ Deno.serve(async (req) => {
 
     const apiKey = Deno.env.get('OPENAI_API_KEY');
     if (!apiKey) return json({ error: 'OPENAI_API_KEY is not configured.' }, 500);
-    const model = Deno.env.get('OPENAI_PPT_PLAN_MODEL') ?? 'gpt-4o';
+    const model = Deno.env.get('OPENAI_PPT_PLAN_MODEL') ?? DEFAULT_PPT_PLAN_MODEL;
 
     let blueprint = await requestBlueprint(apiKey, model, request);
     let issues = validateBlueprint(blueprint, request);
@@ -157,32 +158,23 @@ async function requestBlueprint(
   });
   const requestBody = JSON.stringify({
     model,
+    reasoning: { effort: 'low' },
     max_output_tokens: 12000,
     input: [{ role: 'user', content: [{ type: 'input_text', text: prompt }] }],
     text: { format: { type: 'json_schema', name: 'ppt_deck_blueprint', strict: true, schema: blueprintSchema } },
   });
 
-  let lastError: Error | null = null;
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      const response = await fetch('https://api.openai.com/v1/responses', {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-        body: requestBody,
-      });
-      const rawPayload = await response.text();
-      const payload = parseOpenAiResponse(rawPayload, response.status);
-      if (!response.ok) throw new Error(payload.error?.message ?? `OpenAI blueprint planning failed (HTTP ${response.status}).`);
-      const output = extractResponseText(payload);
-      if (!output) throw new Error('OpenAI blueprint planning did not include text output.');
-      return parseBlueprint(output);
-    } catch (error) {
-      lastError = error instanceof Error ? error : new Error('OpenAI blueprint planning failed.');
-      if (attempt === 0 && /non-JSON response|fetch failed|HTTP (?:408|429|500|502|503|504)/iu.test(lastError.message)) continue;
-      throw lastError;
-    }
-  }
-  throw lastError ?? new Error('OpenAI blueprint planning failed.');
+  const response = await fetchOpenAiWithRetry('https://api.openai.com/v1/responses', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+    body: requestBody,
+  });
+  const rawPayload = await response.text();
+  const payload = parseOpenAiResponse(rawPayload, response.status);
+  if (!response.ok) throw new Error(payload.error?.message ?? `OpenAI blueprint planning failed (HTTP ${response.status}).`);
+  const output = extractResponseText(payload);
+  if (!output) throw new Error('OpenAI blueprint planning did not include text output.');
+  return parseBlueprint(output);
 }
 
 const blueprintSchema = {
@@ -393,7 +385,15 @@ function extractResponseText(payload: Record<string, unknown>): string | null {
   for (const item of output) {
     if (!isRecord(item) || !Array.isArray(item.content)) continue;
     for (const content of item.content) {
-      if (isRecord(content) && typeof content.text === 'string' && content.text.trim()) return content.text;
+      if (!isRecord(content)) continue;
+      const directText = text(content.text);
+      if (directText) return directText;
+      const nestedText = isRecord(content.text) ? text(content.text.value) : '';
+      if (nestedText) return nestedText;
+      const outputText = text(content.output_text);
+      if (outputText) return outputText;
+      const nestedOutputText = isRecord(content.output_text) ? text(content.output_text.value) : '';
+      if (nestedOutputText) return nestedOutputText;
     }
   }
   return null;

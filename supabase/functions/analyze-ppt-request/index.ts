@@ -1,4 +1,5 @@
 type TargetLanguage = 'English' | 'Korean';
+import { DEFAULT_PPT_PLAN_MODEL, fetchOpenAiWithRetry } from '../_shared/openaiRetry.ts';
 type ContentDensity = 'light' | 'standard' | 'detailed';
 type PresentationIntent = 'executive-proposal' | 'strategy-decision' | 'education-lecture' | 'investment-deck' | 'implementation-roadmap';
 type PresentationDocumentType = 'proposal' | 'strategy' | 'lecture' | 'investment' | 'roadmap' | 'report';
@@ -107,7 +108,7 @@ Deno.serve(async (req) => {
 
     const apiKey = Deno.env.get('OPENAI_API_KEY');
     if (!apiKey) return json({ error: 'OPENAI_API_KEY is not configured.' }, 500);
-    const model = Deno.env.get('OPENAI_PPT_PLAN_MODEL') ?? 'gpt-4o';
+    const model = Deno.env.get('OPENAI_PPT_PLAN_MODEL') ?? DEFAULT_PPT_PLAN_MODEL;
     const analysis = withSourceRegistry(applyPurposeTemplate(ensureRequiredClarifications(await requestAnalysis(apiKey, model, request), request), request), request);
     const issues = validateAnalysis(analysis);
     if (issues.length > 0) return json({ error: `PPT request analysis failed: ${issues[0]}`, issues }, 422);
@@ -159,12 +160,15 @@ async function requestAnalysis(apiKey: string, model: string, request: AnalysisR
       'When purpose, audience, duration, content detail, or style direction cannot be inferred safely, return a concise required clarifying question. Each question must offer 2 to 4 selectable options and use field purpose, audience, presentationDurationMinutes, contentDensity, or styleNotes. Do not ask a question for a condition that is explicit and reliable.',
     ],
   });
-  const response = await fetch('https://api.openai.com/v1/responses', {
+  const response = await fetchOpenAiWithRetry('https://api.openai.com/v1/responses', {
     method: 'POST',
     headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
       model,
-      max_output_tokens: 2500,
+      // GPT-5 reasoning uses the same output budget as the structured result.
+      // Keep reasoning focused and reserve enough room for the final JSON payload.
+      reasoning: { effort: 'low' },
+      max_output_tokens: 5000,
       input: [{ role: 'user', content: [
         { type: 'input_text', text: prompt },
         ...(request.sourceAttachments ?? [])
@@ -417,7 +421,15 @@ function extractResponseText(payload: Record<string, unknown>): string | null {
   for (const item of output) {
     if (!isRecord(item) || !Array.isArray(item.content)) continue;
     for (const content of item.content) {
-      if (isRecord(content) && typeof content.text === 'string' && content.text.trim()) return content.text;
+      if (!isRecord(content)) continue;
+      const directText = text(content.text);
+      if (directText) return directText;
+      const nestedText = isRecord(content.text) ? text(content.text.value) : '';
+      if (nestedText) return nestedText;
+      const outputText = text(content.output_text);
+      if (outputText) return outputText;
+      const nestedOutputText = isRecord(content.output_text) ? text(content.output_text.value) : '';
+      if (nestedOutputText) return nestedOutputText;
     }
   }
   return null;

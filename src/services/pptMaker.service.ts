@@ -36,7 +36,9 @@ import { getSupabaseFunctionErrorMessage } from '@/utils/supabaseFunctionError';
 import { mapWithConcurrency } from '@/utils/concurrency';
 import { createLocalPptRequestAnalysis } from '@/utils/pptRequestAnalysis';
 
-const SECTION_PLAN_CONCURRENCY = 2;
+const DEFAULT_SECTION_PLAN_CONCURRENCY = 2;
+const RATE_LIMITED_SECTION_PLAN_CONCURRENCY = 1;
+const SECTION_PLAN_MAX_ATTEMPTS = 3;
 
 function createImagePrompt(request: PptMakerRequest, slide: Omit<SlidePlan, 'imagePrompt'>): string {
   return [
@@ -81,9 +83,10 @@ export const pptMakerService: PptMakerService = {
   async generateDeckPlan(request) {
     if (supabase) {
       const blueprint = await generateDeckBlueprint(request);
+      const sectionPlanConcurrency = getSectionPlanConcurrency(request);
       const sectionPlans = await mapWithConcurrency(
         blueprint.sections,
-        SECTION_PLAN_CONCURRENCY,
+        sectionPlanConcurrency,
         async (section, sectionIndex) => {
           const sectionRequest: PptMakerRequest = {
             ...request,
@@ -120,7 +123,7 @@ export const pptMakerService: PptMakerService = {
           status: 'passed',
           checks: [
             ...blueprint.qaChecks,
-            `Generated ${blueprint.sections.length} independently planned sections with a maximum of ${SECTION_PLAN_CONCURRENCY} concurrent planning calls.`,
+            `Generated ${blueprint.sections.length} independently planned sections with a maximum of ${sectionPlanConcurrency} concurrent planning call(s).`,
             'Section plans were assembled in page order and checked again as one complete deck.',
           ],
           issues: [],
@@ -215,28 +218,37 @@ function createBlueprintHandoff(blueprint: PptDeckBlueprint, sectionIndex: numbe
 
 async function generateSectionPlan(request: PptMakerRequest, sectionTitle: string): Promise<PptDeckPlan> {
   if (!supabase) throw new Error('Supabase is not configured.');
-  const { data, error } = await supabase.functions.invoke<PptDeckPlan>('generate-ppt-slide-plan', {
-    body: { request },
-  });
+  for (let attempt = 0; attempt < SECTION_PLAN_MAX_ATTEMPTS; attempt += 1) {
+    const { data, error } = await supabase.functions.invoke<PptDeckPlan>('generate-ppt-slide-plan', {
+      body: { request },
+    });
 
-  if (error) {
-    throw new Error(`Slide copy planning failed for section "${sectionTitle}": ${await getSupabaseFunctionErrorMessage(error)}`);
+    if (error) {
+      const message = await getSupabaseFunctionErrorMessage(error);
+      if (isOpenAiRateLimitMessage(message) && attempt < SECTION_PLAN_MAX_ATTEMPTS - 1) {
+        await wait(getPlanRetryDelayMs(message, attempt));
+        continue;
+      }
+      throw new Error(`Slide copy planning failed for section "${sectionTitle}": ${message}`);
+    }
+
+    if (!data) {
+      throw new Error(`Slide copy planning returned no slides for section "${sectionTitle}".`);
+    }
+    const plan = attachRedundancySuggestions(compressDeckCopyForLayout({
+      ...data,
+      id: data.id || `section-${request.planningBatch?.sectionId ?? Date.now()}`,
+      createdAt: data.createdAt || new Date().toISOString(),
+      request,
+    } satisfies PptDeckPlan));
+    const issues = getDeckCopyQaIssues(plan, 'section');
+    if (issues.length > 0 || plan.copyQa.status !== 'passed') {
+      throw new Error(issues[0] ?? plan.copyQa.issues[0] ?? `Slide copy did not pass quality validation for section "${sectionTitle}".`);
+    }
+    return plan;
   }
 
-  if (!data) {
-    throw new Error(`Slide copy planning returned no slides for section "${sectionTitle}".`);
-  }
-  const plan = attachRedundancySuggestions(compressDeckCopyForLayout({
-    ...data,
-    id: data.id || `section-${request.planningBatch?.sectionId ?? Date.now()}`,
-    createdAt: data.createdAt || new Date().toISOString(),
-    request,
-  } satisfies PptDeckPlan));
-  const issues = getDeckCopyQaIssues(plan, 'section');
-  if (issues.length > 0 || plan.copyQa.status !== 'passed') {
-    throw new Error(issues[0] ?? plan.copyQa.issues[0] ?? `Slide copy did not pass quality validation for section "${sectionTitle}".`);
-  }
-  return plan;
+  throw new Error(`Slide copy planning exhausted retries for section "${sectionTitle}".`);
 }
 
 function attachRedundancySuggestions(deckPlan: PptDeckPlan): PptDeckPlan {
@@ -288,9 +300,25 @@ async function generateSlideWithRateLimitRetry(
   return null;
 }
 
+function getSectionPlanConcurrency(request: PptMakerRequest): number {
+  return request.contentDensity === 'detailed' || request.slideCount > 20
+    ? RATE_LIMITED_SECTION_PLAN_CONCURRENCY
+    : DEFAULT_SECTION_PLAN_CONCURRENCY;
+}
+
+function isOpenAiRateLimitMessage(message: string): boolean {
+  return /rate limit|tokens per min|requests per min|too many requests|HTTP 429/iu.test(message);
+}
+
+function getPlanRetryDelayMs(message: string, attempt: number): number {
+  const match = message.match(/(?:retry after|try again in)\s*(\d+(?:\.\d+)?)\s*(?:seconds?|secs?|s)\b/iu);
+  const delayMs = match ? Math.ceil(Number(match[1]) * 1_000) : 2_000 * 2 ** attempt;
+  return Math.min(60_000, Math.max(250, delayMs + 500));
+}
+
 function getImageRetryAfterSeconds(message: string): number | null {
-  const match = message.match(/retry after\s+(\d+)\s+seconds/iu) ?? message.match(/try again in\s+(\d+)s/iu);
-  return match ? Math.max(1, Number(match[1])) : null;
+  const match = message.match(/retry after\s+(\d+(?:\.\d+)?)\s+seconds/iu) ?? message.match(/try again in\s+(\d+(?:\.\d+)?)s/iu);
+  return match ? Math.max(1, Math.ceil(Number(match[1]))) : null;
 }
 
 function wait(durationMs: number): Promise<void> {

@@ -10,7 +10,7 @@
 2. `analyze-ppt-request` extracts the topic, purpose, audience, presentation duration, recommended slide count, document type, deck format, key message, and required sections. The resulting production conditions are saved in the maker form and attached to the saved deck request.
    It also analyzes attached source material: document text, worksheet rows, and visual references become a stored summary, key points, data candidates, available visual assets, and a source registry for the Blueprint and slide-planning calls.
 3. Each Blueprint section contains a role, key question, purpose, key message, page range, and visual focus. The generated preview exposes this outline for review before export. A section contains at most ten slides, so a 50-slide deck is planned as five coherent section batches rather than one oversized response.
-4. `generate-ppt-slide-plan` creates Section Slide JSON batches with a bounded concurrency of two. Each call receives the controlling Blueprint and a Blueprint-derived handoff from the preceding sections, so the story continues without waiting for another section request to finish.
+4. `generate-ppt-slide-plan` creates Section Slide JSON batches with a bounded concurrency of two for normal requests. Detailed or 21+-slide decks are planned one section at a time to protect the OpenAI token budget; 429 responses honor Retry-After or the provider's retry guidance before bounded retries. Each call receives the controlling Blueprint and a Blueprint-derived handoff from the preceding sections.
 5. Each Slide JSON record contains exactly one semantic slide role (`opening`, `context`, `problem-framing`, `evidence`, `comparison`, `solution`, `implementation`, `case-study`, `decision`, or `conclusion`), plus a decision-oriented title, slide objective, main message, three to five supporting proof points (`heading` + complete `detail`), a recommended decision, and a varied visual structure.
    It also stores a narrative dependency: the preceding slide number, the question being answered, this slide's answer summary, and the one question handed to the next slide.
 6. `pptDocument.service.ts` is the layout engine. It maps the approved plan to editable text, shape, footer, and logo rules.
@@ -39,7 +39,7 @@ The maker turns the initial request into an explicit planning brief before it cr
 - **Slide dependencies**: every slide is linked to its direct predecessor. The prior slide's `nextQuestion` is copied into the following slide's `questionAddressed`, which records the argument chain and lets the assembled deck verify transitions across parallel section batches.
 - **Additional instructions**: source-specific constraints, exclusions, evidence requirements, tone, or mandatory data points.
 
-`generate-ppt-deck-blueprint` sends this brief with the source text to OpenAI before any slide is drafted. The Blueprint maps the required sections into a coherent page plan with no more than ten slides per section. It defines what each section must accomplish and the audience question it must answer, then reserves a contiguous range of slides for that work. The client then calls `generate-ppt-slide-plan` once per section, with at most two section calls in flight. Every request receives a short handoff derived from the shared Blueprint rather than waiting for earlier model output. This keeps 50- to 100-slide work bounded, retryable by section, parallel where safe, and grounded in one shared storyline. The selected QLEARN template remains a style reference, not a reason to repeat the same composition on every slide.
+`generate-ppt-deck-blueprint` sends this brief with the source text to OpenAI before any slide is drafted. The Blueprint maps the required sections into a coherent page plan with no more than ten slides per section. It defines what each section must accomplish and the audience question it must answer, then reserves a contiguous range of slides for that work. The client then calls `generate-ppt-slide-plan` once per section, with at most two section calls in flight for normal requests and one for detailed or long decks. Every request receives a short handoff derived from the shared Blueprint. This keeps 50- to 100-slide work bounded, retryable by section, rate-limit aware, and grounded in one shared storyline. The selected QLEARN template remains a style reference, not a reason to repeat the same composition on every slide.
 
 ## Important files
 
@@ -71,7 +71,7 @@ Supabase server secrets:
 
 ```dotenv
 OPENAI_API_KEY=
-OPENAI_PPT_PLAN_MODEL=gpt-4o
+OPENAI_PPT_PLAN_MODEL=gpt-5
 ```
 
 Do not expose `SUPABASE_SERVICE_ROLE_KEY` or `OPENAI_API_KEY` in the Vite environment. The service role key remains inside Supabase functions for Storage persistence only.
