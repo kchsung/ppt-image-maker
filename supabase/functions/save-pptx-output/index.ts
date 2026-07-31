@@ -6,6 +6,10 @@ type SavePptxBody = {
   pptxBase64?: string;
 };
 
+type GenerationJobRow = {
+  total_items: number;
+};
+
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
@@ -32,6 +36,16 @@ Deno.serve(async (req) => {
     const storagePath = `${body.jobId}/final/${fileName}`;
     const bytes = base64ToBytes(body.pptxBase64);
 
+    const { data: job, error: jobError } = await supabase
+      .from('generation_jobs')
+      .select('total_items')
+      .eq('id', body.jobId)
+      .single();
+
+    if (jobError || !job) {
+      throw jobError ?? new Error('PPT generation job was not found.');
+    }
+
     const { error: uploadError } = await supabase.storage.from('ppt-generations').upload(storagePath, bytes, {
       contentType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
       upsert: true,
@@ -46,6 +60,9 @@ Deno.serve(async (req) => {
       .from('generation_jobs')
       .update({
         result_path: resultPath,
+        status: 'succeeded',
+        progress: 100,
+        completed_items: (job as GenerationJobRow).total_items,
         updated_at: new Date().toISOString(),
       })
       .eq('id', body.jobId);
@@ -74,7 +91,10 @@ function createAdminClient(): SupabaseClient {
 
 function sanitizeFileName(fileName: string): string {
   const cleaned = fileName
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
     .replace(/[\\/:*?"<>|]+/g, '-')
+    .replace(/[^A-Za-z0-9._-]+/g, '-')
     .replace(/\s+/g, '-')
     .replace(/-+/g, '-')
     .replace(/^-|-$/g, '');
