@@ -20,11 +20,15 @@ type PptxPresentation = PptxGenJS;
 export const pptExportService: PptExportService = {
   async exportDeck(deckPlan, enhancement, slideElements) {
     const blob = await createPresentationBlob(deckPlan, enhancement, slideElements);
-    downloadBlob(blob, enhancement.fileName);
+    triggerDownload(blob, enhancement.fileName);
   },
 
   async createDeckBlob(deckPlan, enhancement, slideElements = []) {
     return createPresentationBlob(deckPlan, enhancement, slideElements);
+  },
+
+  downloadBlob(blob, fileName) {
+    triggerDownload(blob, fileName);
   },
 };
 
@@ -153,7 +157,7 @@ function safeText(value: string): string {
   return stripEllipsis(value).replace(/\s+/g, ' ').trim();
 }
 
-function downloadBlob(blob: Blob, fileName: string): void {
+function triggerDownload(blob: Blob, fileName: string): void {
   const anchor = document.createElement('a');
   anchor.href = URL.createObjectURL(blob);
   anchor.download = fileName;

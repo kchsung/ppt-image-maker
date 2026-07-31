@@ -18,6 +18,7 @@ import {
 import { useAppDispatch, useAppSelector } from '@/hooks/redux';
 import { getTemplateDesignProfile, pptTemplates } from '@/mocks/pptTemplates.mock';
 import { pptExportService } from '@/services/pptExport.service';
+import { pptAdminService } from '@/services/pptAdmin.service';
 import type { PptTemplate } from '@/types/models/pptMaker.model';
 
 type PptMakerTab = 'input' | 'output';
@@ -25,7 +26,8 @@ type PptMakerTab = 'input' | 'output';
 export function PptMakerPage() {
   const dispatch = useAppDispatch();
   const [activeTab, setActiveTab] = useState<PptMakerTab>('input');
-  const { form, deckPlan, documentEnhancement, status, documentStatus, analysisStatus, error } = useAppSelector(
+  const [isExportingPptx, setIsExportingPptx] = useState(false);
+  const { form, deckPlan, generationJobId, documentEnhancement, status, documentStatus, analysisStatus, error } = useAppSelector(
     (state) => state.pptMaker,
   );
   const isGenerating = status === 'loading' || documentStatus === 'loading';
@@ -40,7 +42,7 @@ export function PptMakerPage() {
         return dispatch(enhanceGeneratedPptDocument(generatedDeckPlan)).unwrap();
       })
       .then(() => {
-        toast.success('Editable PPTX layout is ready. Use Export PPTX to download it or generate it from the List page to save it to Supabase.');
+        toast.success('Editable PPTX layout is ready. Export it to download the file and save it to List automatically.');
       })
       .catch(() => toast.error('PPT generation failed.'));
   };
@@ -71,14 +73,25 @@ export function PptMakerPage() {
     const exportRoot = document.querySelector<HTMLElement>(`[data-pptx-deck="${deckPlan.id}"]`);
     const slideElements = exportRoot ? Array.from(exportRoot.querySelectorAll<HTMLElement>('[data-pptx-slide]')) : [];
 
-    void pptExportService
-      .exportDeck(
-        deckPlan,
-        documentEnhancement,
-        slideElements,
-      )
-      .then(() => toast.success('PPTX export started.'))
-      .catch(() => toast.error('PPTX export failed.'));
+    setIsExportingPptx(true);
+    void (async () => {
+      try {
+        const pptxBlob = await pptExportService.createDeckBlob(deckPlan, documentEnhancement, slideElements);
+        pptExportService.downloadBlob(pptxBlob, documentEnhancement.fileName);
+
+        if (!generationJobId) {
+          toast.success('PPTX downloaded. Create a new deck to save future exports in List.');
+          return;
+        }
+
+        await pptAdminService.savePptxOutput(generationJobId, documentEnhancement.fileName, pptxBlob);
+        toast.success('PPTX downloaded and saved to List.');
+      } catch (exportError) {
+        toast.error(exportError instanceof Error ? exportError.message : 'PPTX export failed.');
+      } finally {
+        setIsExportingPptx(false);
+      }
+    })();
   };
 
   return (
@@ -148,6 +161,7 @@ export function PptMakerPage() {
         <GeneratedPptDeckPanel
           deckPlan={deckPlan}
           documentEnhancement={documentEnhancement}
+          isExportingPptx={isExportingPptx}
           onExportPptx={handleExportPptx}
         />
       )}

@@ -16,6 +16,7 @@ import type {
 interface GeneratedPptDeckPanelProps {
   deckPlan: PptDeckPlan | null;
   documentEnhancement: PptDocumentEnhancement | null;
+  isExportingPptx?: boolean;
   onExportPptx: () => void;
 }
 
@@ -56,7 +57,7 @@ const coverageKindLabels: Record<PptCoverageSuggestion['kind'], string> = {
   impact: 'Expected impact',
 };
 
-export function GeneratedPptDeckPanel({ deckPlan, documentEnhancement, onExportPptx }: GeneratedPptDeckPanelProps) {
+export function GeneratedPptDeckPanel({ deckPlan, documentEnhancement, isExportingPptx = false, onExportPptx }: GeneratedPptDeckPanelProps) {
   const slides = useMemo(() => deckPlan?.slides.slice().sort((left, right) => left.pageNumber - right.pageNumber) ?? [], [deckPlan]);
   const [selectedSlideId, setSelectedSlideId] = useState<string | null>(null);
   const [expandedSlide, setExpandedSlide] = useState<SlidePlan | null>(null);
@@ -72,9 +73,9 @@ export function GeneratedPptDeckPanel({ deckPlan, documentEnhancement, onExportP
               <h2 className="text-base font-bold text-primary">Editable PPTX preview</h2>
               <p className="mt-1 text-sm text-text-subtle">The preview and exported PPTX share the same Slide JSON and HTML/CSS layout.</p>
             </div>
-            <Button disabled={!canExport} onClick={onExportPptx}>
+            <Button disabled={!canExport || isExportingPptx} onClick={onExportPptx}>
               <Download className="h-4 w-4" />
-              Export PPTX
+              {isExportingPptx ? 'Saving PPTX' : 'Export & Save PPTX'}
             </Button>
           </div>
         </CardHeader>

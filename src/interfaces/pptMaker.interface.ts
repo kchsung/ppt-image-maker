@@ -29,4 +29,5 @@ export interface PptExportService {
     enhancement: PptDocumentEnhancement,
     slideElements?: HTMLElement[],
   ): Promise<Blob>;
+  downloadBlob(blob: Blob, fileName: string): void;
 }

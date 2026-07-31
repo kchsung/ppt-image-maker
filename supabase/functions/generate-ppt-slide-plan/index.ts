@@ -210,6 +210,7 @@ Deno.serve(async (req) => {
 
     const model = Deno.env.get('OPENAI_PPT_PLAN_MODEL') ?? DEFAULT_PPT_PLAN_MODEL;
     let plan = await expandPlanToRequestedSlideCount(apiKey, model, request, await requestPlan(apiKey, model, request));
+    plan = ensurePlanTextCompleteness(plan, request);
     plan = ensurePlanDiversity(plan, request);
     let issues = validatePlan(plan, request);
     if (issues.length > 0) {
@@ -219,6 +220,7 @@ Deno.serve(async (req) => {
         request,
         await requestPlan(apiKey, model, request, plan.slides, issues, 'repair'),
       );
+      plan = ensurePlanTextCompleteness(plan, request);
       plan = ensurePlanDiversity(plan, request);
       issues = validatePlan(plan, request);
     }
@@ -312,6 +314,7 @@ async function requestPlan(
       'Use exactly the target language. English slides must contain no Hangul. Korean slides may use Korean text plus proper names, QLEARN for Startup, and standard uppercase business or technical abbreviations such as AI, R&D, API, KPI, OKR, ROI, LLM, GPT, B2B, and B2C. Do not write ordinary English sentences on Korean slides.',
       'The strategy.coreThesis must state the deck conclusion. strategy.audienceNeed states the audience tension. strategy.desiredOutcome states the decision or action expected after the presentation. strategy.narrativeArc must group the slide numbers into a clear beginning, evidence-building middle, and action-oriented close.',
       'Every slide must express one decision-relevant claim, not merely a topic. title is the conclusion the audience should remember, objective states why this slide exists, mainMessage explains the so-what in one complete sentence, and decision states the action or decision the audience should take next.',
+      'Every required text property must be a complete non-empty string: title, subtitle, objective, mainMessage, decision, takeaway, every label, and every contentBlocks heading/detail. Never return an empty string, null, placeholder, or whitespace-only value for those fields. If a claim is uncertain, state the decision criterion or recommended next step rather than leaving a field blank.',
       'When the argument raises a problem, challenge, risk, or gap, close the coverage loop in the deck: include a solution that answers the problem, the concrete features or capabilities that make it workable, a source-backed KPI or qualitative review criterion that proves progress, and the expected operational, customer, learning, or financial impact. Do not imply those elements only in vague closing copy.',
       'Write titles as message headlines, never simple topic labels. A weak topic title such as "AI Platform", "Service Overview", or "Implementation Plan" must become a conclusion such as "A Governed AI Platform Enables Better Decisions". Use the slide mainMessage as the factual basis. Preserve the exact target language and keep the title concise enough for an editable PowerPoint title box.',
       'Every slide must include dependency. dependency.questionAddressed is the exact unresolved question carried from the preceding slide, dependency.answerSummary states how this slide resolves it, and dependency.nextQuestion is the single question that the following slide must answer. Copy the preceding slide nextQuestion verbatim into the following slide questionAddressed. On the first slide, previousSlideNumber must be null; on every other slide, it must be the preceding global page number. The final slide must set nextQuestion to null. This connection must advance the argument rather than restate the previous slide.',
@@ -319,7 +322,9 @@ async function requestPlan(
       'labels must match the contentBlock headings in the same order so legacy exports remain compatible.',
       'Classify each slide before choosing visualStructure: comparison for alternatives or before/after states; process for a workflow or sequence; timeline for milestones, phases, or dates; structure for a system, capability, or framework; data for source-backed metrics or evidence; case for a customer, scenario, or example; message for a single executive claim. Also return diagram for every slide: type must be none, process, cycle, hierarchy, timeline, relationship, or change; rationale states the content cue; nodes contains the 3-5 contentBlock headings. For a comparison with two clearly stated targets and two or more criteria, return comparisonTable: exactly three columnHeaders (criterion and two target names), source-grounded rows, a difference or key-result emphasis only when supported by the values, and one concise keyResult. Otherwise return comparisonTable as null. For source-backed numeric data, return chart: choose purpose comparison/trend/composition/distribution/target-progress and the matching type bar/line/donut/histogram/progress; series must contain only source-supported numeric values, targetValue is only used when the source states a target (or a percentage has the natural target of 100), and keyResult names the most important supported result. Return chart as null whenever the source does not contain enough numeric values; never invent a series, target, or percentage. Also return keyMetric when one source-backed metric is more decision-relevant than the rest: include its label, displayed value, numeric value, a changeText only if the source states a change rate, direction up/down/neutral, and a short comparisonText. Return keyMetric as null when the source gives no numeric metric. Use process for ordered steps, cycle for feedback loops, hierarchy for levels or foundations, timeline for dates and milestones, relationship for connected entities, and change for before-and-after states. Select the matching layout: side-by-side or before-after for change, numbered-process for process, roadmap for timeline, hub-and-spoke for relationship or cycle, pyramid for hierarchy, metrics-dashboard for data, case-story for a case, and message-emphasis or card-grid for a message. Never repeat a visualStructure on consecutive slides.',
       'When styleReference.templateDesign is provided, treat it as a selected template analysis. Reflect its signatureLayout in the plan and favor its recommendedVisualStructures only where they fit the message. Keep the required variety across the deck; do not force every slide into one template composition.',
-      'Use hero-visual for the cover and closing-commitment for the final slide. Use at least four distinct visual structures in a deck of four or more slides.',
+      request.planningBatch
+        ? 'This is one bounded section of a larger deck. Keep adjacent slides visually distinct and use the section visual focus where it fits; do not force an unrelated layout merely to meet a deck-wide diversity target.'
+        : 'Use hero-visual for the cover and closing-commitment for the final slide. Use at least four distinct visual structures in a deck of four or more slides.',
       'For detailed content density, choose layouts that can comfortably hold five proof points, such as a hub-and-spoke, metrics dashboard, roadmap, pyramid, or two-column evidence structure. Do not compress five explanations into a narrow single row.',
       'Write concise, complete, factual copy. No ellipses, page markers, template labels, source headers, lorem ipsum, or invented citations.',
       'Titles must fit editable PowerPoint title boxes: 42 characters maximum in English or 22 characters maximum in Korean.',
@@ -822,6 +827,155 @@ function normalizeDependency(value: unknown, slide: Record<string, unknown>): Sl
   };
 }
 
+function ensurePlanTextCompleteness(plan: DraftPlan, request: PptMakerRequest): DraftPlan {
+  const language = request.targetLanguage;
+  const densityPolicy = getDensityPolicy(request.contentDensity);
+  const fallbackStrategy = getFallbackStrategy(request, plan.strategy);
+
+  return {
+    strategy: fallbackStrategy,
+    slides: plan.slides.map((slide, index) => ensureSlideTextCompleteness(slide, index + 1, language, densityPolicy.blockCount)),
+  };
+}
+
+function ensureSlideTextCompleteness(
+  slide: DraftSlide,
+  fallbackPageNumber: number,
+  language: TargetLanguage,
+  requiredBlockCount: number,
+): DraftSlide {
+  const existingBlocks = slide.contentBlocks.filter((block) => block.heading.trim() || block.detail.trim());
+  const sourceCopy = firstNonEmpty([
+    slide.mainMessage,
+    slide.objective,
+    slide.takeaway,
+    slide.decision,
+    slide.subtitle,
+    slide.title,
+    ...existingBlocks.flatMap((block) => [block.detail, block.heading]),
+  ]);
+  const defaultMainMessage = sourceCopy || getFallbackMainMessage(language);
+  const usedHeadingKeys = new Set<string>();
+  const contentBlocks = Array.from({ length: requiredBlockCount }, (_, index) => {
+    const block = existingBlocks[index];
+    const proposedHeading = firstNonEmpty([
+      block?.heading,
+      slide.labels[index],
+      getFallbackBlockHeading(language, index + 1),
+    ]);
+    const heading = ensureUniqueBlockHeading(proposedHeading, language, index + 1, usedHeadingKeys);
+    const detail = ensureMinimumDetail(
+      firstNonEmpty([
+        block?.detail,
+        existingBlocks[index % Math.max(existingBlocks.length, 1)]?.detail,
+        defaultMainMessage,
+        slide.objective,
+        slide.takeaway,
+      ]),
+      language,
+    );
+    return { heading, detail };
+  });
+
+  const mainMessage = firstNonEmpty([slide.mainMessage, contentBlocks[0]?.detail, defaultMainMessage]);
+  const objective = firstNonEmpty([slide.objective, mainMessage, slide.takeaway, getFallbackObjective(language)]);
+  const decision = firstNonEmpty([slide.decision, slide.takeaway, mainMessage, getFallbackDecision(language)]);
+  const takeaway = firstNonEmpty([slide.takeaway, slide.decision, mainMessage, getFallbackTakeaway(language)]);
+  const title = firstNonEmpty([
+    slide.title,
+    getConciseMessageHeadline(mainMessage, language),
+    getFallbackTitle(language),
+  ]);
+
+  return {
+    ...slide,
+    pageNumber: positive(slide.pageNumber, fallbackPageNumber),
+    title,
+    subtitle: firstNonEmpty([slide.subtitle, objective, mainMessage, getFallbackSubtitle(language)]),
+    objective,
+    mainMessage,
+    labels: contentBlocks.map((block) => block.heading),
+    contentBlocks,
+    decision,
+    takeaway,
+  };
+}
+
+function ensureUniqueBlockHeading(
+  proposedHeading: string,
+  language: TargetLanguage,
+  index: number,
+  usedHeadingKeys: Set<string>,
+): string {
+  const fallback = getFallbackBlockHeading(language, index);
+  const key = normalizeCopyKey(proposedHeading);
+  if (key && !usedHeadingKeys.has(key)) {
+    usedHeadingKeys.add(key);
+    return proposedHeading;
+  }
+  usedHeadingKeys.add(normalizeCopyKey(fallback));
+  return fallback;
+}
+
+function getFallbackStrategy(request: PptMakerRequest, strategy: DeckStrategy): DeckStrategy {
+  const topic = firstNonEmpty([request.topic, request.purpose, request.audience]);
+  const thesis = firstNonEmpty([strategy.coreThesis, request.coreMessage, topic, getFallbackMainMessage(request.targetLanguage)]);
+  return {
+    coreThesis: thesis,
+    audienceNeed: firstNonEmpty([strategy.audienceNeed, request.audience, getFallbackAudienceNeed(request.targetLanguage)]),
+    desiredOutcome: firstNonEmpty([strategy.desiredOutcome, request.purpose, getFallbackDecision(request.targetLanguage)]),
+    narrativeArc: strategy.narrativeArc,
+  };
+}
+
+function firstNonEmpty(values: Array<string | undefined | null>): string {
+  return values.map((value) => text(value)).find(Boolean) ?? '';
+}
+
+function ensureMinimumDetail(value: string, language: TargetLanguage): string {
+  const normalized = text(value);
+  const minimum = getDensityPolicy('detailed')[language === 'Korean' ? 'koreanMinLength' : 'englishMinLength'];
+  if (getTextLength(normalized) >= minimum) return normalized;
+  const suffix = language === 'Korean'
+    ? ' 이 근거는 다음 실행 판단과 책임 있는 행동을 구체화합니다.'
+    : ' This evidence guides the team\'s next accountable decision.';
+  return `${normalized || getFallbackMainMessage(language)}${suffix}`.replace(/\s+/g, ' ').trim();
+}
+
+function getFallbackTitle(language: TargetLanguage): string {
+  return language === 'Korean' ? '핵심 근거가 다음 실행 판단을 이끕니다' : 'Evidence Guides the Next Decision';
+}
+
+function getFallbackSubtitle(language: TargetLanguage): string {
+  return language === 'Korean' ? '핵심 근거와 실행 방향을 정리합니다.' : 'A concise view of the evidence and action direction.';
+}
+
+function getFallbackObjective(language: TargetLanguage): string {
+  return language === 'Korean' ? '의사결정에 필요한 핵심 근거와 다음 행동을 명확히 합니다.' : 'Clarify the evidence and next action needed for a decision.';
+}
+
+function getFallbackMainMessage(language: TargetLanguage): string {
+  return language === 'Korean'
+    ? '검증된 근거를 바탕으로 다음 실행 판단과 책임 있는 행동을 구체화합니다.'
+    : 'Verified evidence clarifies the next accountable decision and action.';
+}
+
+function getFallbackDecision(language: TargetLanguage): string {
+  return language === 'Korean' ? '핵심 근거를 확인하고 다음 실행 책임자를 정합니다.' : 'Confirm the evidence and assign the next accountable action.';
+}
+
+function getFallbackTakeaway(language: TargetLanguage): string {
+  return language === 'Korean' ? '근거를 실행 판단으로 연결해야 다음 단계가 분명해집니다.' : 'Connect evidence to an accountable decision before moving forward.';
+}
+
+function getFallbackAudienceNeed(language: TargetLanguage): string {
+  return language === 'Korean' ? '의사결정자는 근거와 실행 책임이 연결된 판단 기준이 필요합니다.' : 'Decision-makers need a clear link between evidence and action.';
+}
+
+function getFallbackBlockHeading(language: TargetLanguage, index: number): string {
+  return language === 'Korean' ? `핵심 근거 ${index}` : `Key evidence ${index}`;
+}
+
 function ensurePlanDiversity(plan: DraftPlan, request: PptMakerRequest): DraftPlan {
   const totalSlides = getTotalSlideCount(request);
   const batchStartPage = getBatchStartPage(request);
@@ -1230,7 +1384,12 @@ function validatePlan(plan: DraftPlan, request: PptMakerRequest): string[] {
   if (!strategy.coreThesis || !strategy.audienceNeed || !strategy.desiredOutcome) issues.push('The deck strategy is missing a thesis, audience need, or desired outcome.');
   if (!request.planningBatch && strategy.narrativeArc.length < 3) issues.push('The deck strategy needs a beginning, evidence-building middle, and action-oriented close.');
   const distinct = new Set(slides.map((slide) => slide.visualStructure));
-  if (batchSlideCount >= 4 && distinct.size < Math.min(4, batchSlideCount)) issues.push('The plan needs at least four distinct visual structures.');
+  if (!request.planningBatch && batchSlideCount >= 4 && distinct.size < Math.min(4, batchSlideCount)) {
+    issues.push('The plan needs at least four distinct visual structures.');
+  }
+  if (request.planningBatch && batchSlideCount >= 3 && distinct.size < Math.min(3, batchSlideCount)) {
+    issues.push('This section needs at least three distinct visual structures.');
+  }
   slides.forEach((slide, index) => {
     const slideNumber = batchStartPage + index;
     if (slide.pageNumber !== slideNumber) issues.push(`Slide ${slideNumber} has an invalid page number.`);
@@ -1244,7 +1403,7 @@ function validatePlan(plan: DraftPlan, request: PptMakerRequest): string[] {
     if (slideNumber === 1 && slide.visualStructure !== 'hero-visual') issues.push('Slide 1 must use hero-visual.');
     if (totalSlides > 1 && slideNumber === totalSlides && slide.visualStructure !== 'closing-commitment') issues.push(`Slide ${slideNumber} must use closing-commitment.`);
     if (index > 0 && slide.visualStructure === slides[index - 1].visualStructure) issues.push(`Slides ${index} and ${slideNumber} repeat the same visual structure.`);
-    if (index > 0 && getLayoutFamily(slide.visualStructure) === getLayoutFamily(slides[index - 1].visualStructure)) {
+    if (!request.planningBatch && index > 0 && getLayoutFamily(slide.visualStructure) === getLayoutFamily(slides[index - 1].visualStructure)) {
       issues.push(`Slides ${index} and ${slideNumber} repeat the same layout family.`);
     }
     if (slide.labels.length < 3) issues.push(`Slide ${slideNumber} needs at least three labels.`);

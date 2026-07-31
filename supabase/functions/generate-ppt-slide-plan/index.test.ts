@@ -318,6 +318,51 @@ describe('generate-ppt-slide-plan Edge Function', () => {
     expect(body.slides.at(-1)?.dependency.nextQuestion).toBeNull();
   });
 
+  it('does not reject a focused section simply because it cannot satisfy a deck-wide diversity target', async () => {
+    const sectionRequest = {
+      request: {
+        ...requestBody.request,
+        slideCount: 20,
+        deckBlueprint: {
+          title: 'Product strategy deck',
+          strategy: validStrategy(),
+          sections: [
+            {
+              id: 'solution',
+              title: 'Solution and product',
+              purpose: 'Explain the product architecture.',
+              keyMessage: 'One connected product model makes the service operational.',
+              slideStart: 9,
+              slideCount: 4,
+              visualFocus: ['hub-and-spoke', 'pyramid-framework', 'card-grid'],
+            },
+          ],
+        },
+        planningBatch: { sectionId: 'solution', startPage: 9, slideCount: 4, totalSlides: 20 },
+      },
+    };
+    const sectionSlides = Array.from({ length: 4 }, (_, index) => validSlide({
+      pageNumber: index + 1,
+      slideRole: 'solution',
+      visualStructure: 'card-grid',
+      archetype: 'card-grid',
+      title: [
+        'A connected product model makes the service operational',
+        'A common evidence layer keeps product decisions aligned',
+        'Reusable capabilities reduce delivery effort across teams',
+        'A governed workflow turns product features into measurable outcomes',
+      ][index],
+    }));
+    fetchMock.mockResolvedValueOnce(response(sectionSlides)).mockResolvedValueOnce(response(sectionSlides));
+
+    const result = await handler!(new Request('http://localhost', { method: 'POST', body: JSON.stringify(sectionRequest) }));
+    const body = await result.json();
+
+    expect(result.status, JSON.stringify(body)).toBe(200);
+    expect(new Set(body.slides.map((slide: { visualStructure: string }) => slide.visualStructure)).size).toBeGreaterThanOrEqual(3);
+    expect(body.slides.map((slide: { pageNumber: number }) => slide.pageNumber)).toEqual([9, 10, 11, 12]);
+  });
+
   it('requests missing slide drafts when the model returns fewer slides than requested', async () => {
     const requestedSlides = 20;
     const initialSlides = Array.from({ length: 14 }, (_, index) => validSlide({ pageNumber: index + 1, title: `Decision ${index + 1}` }));
@@ -483,12 +528,45 @@ describe('generate-ppt-slide-plan Edge Function', () => {
     expect(result.status).toBe(200);
   });
 
-  it('repairs a plan that does not include enough supporting proof points', async () => {
+  it('backfills missing proof points from the approved slide message instead of failing the whole deck', async () => {
     fetchMock.mockResolvedValueOnce(response([validSlide({ contentBlocks: [{ heading: 'Set intent', detail: 'Short detail.' }] })]))
       .mockResolvedValueOnce(response([validSlide()]));
     const result = await handler!(new Request('http://localhost', { method: 'POST', body: JSON.stringify(requestBody) }));
+    const body = await result.json();
+
     expect(result.status).toBe(200);
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(body.slides[0].contentBlocks).toHaveLength(3);
+    expect(body.slides[0].labels).toEqual(body.slides[0].contentBlocks.map((block: { heading: string }) => block.heading));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('fills isolated empty text fields with source-derived editable copy instead of returning a 422', async () => {
+    fetchMock.mockResolvedValue(response([validSlide({
+      title: '',
+      subtitle: '',
+      objective: '',
+      decision: '',
+      takeaway: '',
+      labels: ['Set intent', '', 'Approve action'],
+      contentBlocks: [
+        { heading: 'Set intent', detail: 'State the decision, audience, and acceptable risk before the team creates a draft.' },
+        { heading: '', detail: '' },
+        { heading: 'Approve action', detail: 'Assign an owner who confirms the recommendation and next action before rollout.' },
+      ],
+    })]));
+
+    const result = await handler!(new Request('http://localhost', { method: 'POST', body: JSON.stringify(requestBody) }));
+    const body = await result.json();
+    const slide = body.slides[0];
+
+    expect(result.status).toBe(200);
+    expect([slide.title, slide.subtitle, slide.objective, slide.mainMessage, slide.decision, slide.takeaway]
+      .every((value: string) => value.trim().length > 0)).toBe(true);
+    expect(slide.contentBlocks).toHaveLength(3);
+    expect(slide.contentBlocks.flatMap((block: { heading: string; detail: string }) => [block.heading, block.detail])
+      .every((value: string) => value.trim().length > 0)).toBe(true);
+    expect(new Set(slide.labels).size).toBe(3);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it('repairs generic and repeated slide claims before returning the plan', async () => {
