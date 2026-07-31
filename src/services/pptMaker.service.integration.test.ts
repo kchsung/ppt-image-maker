@@ -117,7 +117,7 @@ describe('pptMakerService remote planning scenario', () => {
     vi.resetModules();
   });
 
-  it('serializes a rate-sensitive 30-slide deck while preserving Blueprint-aligned section requests', async () => {
+  it('serializes a rate-sensitive 30-slide deck in bounded Blueprint-aligned work batches', async () => {
     const blueprint = createBlueprint(30);
     let activeSectionRequests = 0;
     let maximumActiveSectionRequests = 0;
@@ -145,11 +145,13 @@ describe('pptMakerService remote planning scenario', () => {
     const deck = await pptMakerService.generateDeckPlan({ ...samplePptMakerRequest, slideCount: 30 });
 
     expect(invoke.mock.calls.filter(([name]) => name === 'generate-ppt-deck-blueprint')).toHaveLength(1);
-    expect(sectionRequests).toHaveLength(3);
+    expect(sectionRequests).toHaveLength(9);
     expect(maximumActiveSectionRequests).toBe(1);
-    expect(sectionRequests.map((request) => request.planningBatch?.slideCount)).toEqual([10, 10, 10]);
+    expect(sectionRequests.map((request) => request.planningBatch?.slideCount)).toEqual([4, 4, 2, 4, 4, 2, 4, 4, 2]);
     expect(sectionRequests.find((request) => request.planningBatch?.sectionId === 'section-3')?.planningBatch?.previousSlides)
       .toMatchObject([{ pageNumber: 10 }, { pageNumber: 20 }]);
+    expect(sectionRequests.find((request) => request.planningBatch?.startPage === 5)?.planningBatch?.previousSlides)
+      .toMatchObject([{ pageNumber: 3 }, { pageNumber: 4 }]);
     expect(deck.strategy).toEqual(blueprint.strategy);
     expect(deck.slides.map((slide) => slide.pageNumber)).toEqual(Array.from({ length: 30 }, (_, index) => index + 1));
     expect(deck.slides[9].dependency?.nextQuestion).toBe(deck.slides[10].dependency?.questionAddressed);
@@ -177,6 +179,28 @@ describe('pptMakerService remote planning scenario', () => {
       .rejects.toThrow('Slide copy planning failed for section "Evidence And Operating Model": The section request was rejected.');
   });
 
+  it('retries a transient Supabase compute-capacity failure for the affected work batch', async () => {
+    const blueprint = createBlueprint(20);
+    let hasReturnedCapacityError = false;
+    const invoke = vi.fn(async (functionName: string, options: { body: { request: PptMakerRequest } }) => {
+      if (functionName === 'generate-ppt-deck-blueprint') return { data: blueprint, error: null };
+      if (functionName === 'generate-ppt-slide-plan') {
+        if (!hasReturnedCapacityError) {
+          hasReturnedCapacityError = true;
+          return { data: null, error: new Error('Function failed due to not having enough compute resources. Please try again in 0s.') };
+        }
+        return { data: createSectionPlan(options.body.request, blueprint.strategy), error: null };
+      }
+      throw new Error(`Unexpected function call: ${functionName}`);
+    });
+    const { pptMakerService } = await loadService(invoke);
+
+    const deck = await pptMakerService.generateDeckPlan({ ...samplePptMakerRequest, slideCount: 20 });
+
+    expect(invoke.mock.calls.filter(([name]) => name === 'generate-ppt-slide-plan')).toHaveLength(7);
+    expect(deck.slides).toHaveLength(20);
+  });
+
   it('rejects a complete-looking deck when section pages cannot be assembled contiguously', async () => {
     const blueprint = createBlueprint(20);
     const invoke = vi.fn(async (functionName: string, options: { body: { request: PptMakerRequest } }) => {
@@ -202,7 +226,7 @@ describe('pptMakerService remote planning scenario', () => {
       .rejects.toThrow('Deck assembly requires page 11 exactly once and in order.');
   });
 
-  it('keeps a 100-slide request bounded to ten sequential section calls to protect the OpenAI token budget', async () => {
+  it('keeps a 100-slide request bounded to small sequential section batches to protect Edge compute and the OpenAI token budget', async () => {
     const blueprint = createBlueprint(100);
     let activeSectionRequests = 0;
     let maximumActiveSectionRequests = 0;
@@ -221,7 +245,7 @@ describe('pptMakerService remote planning scenario', () => {
 
     const deck = await pptMakerService.generateDeckPlan({ ...samplePptMakerRequest, slideCount: 100 });
 
-    expect(invoke.mock.calls.filter(([name]) => name === 'generate-ppt-slide-plan')).toHaveLength(10);
+    expect(invoke.mock.calls.filter(([name]) => name === 'generate-ppt-slide-plan')).toHaveLength(30);
     expect(maximumActiveSectionRequests).toBe(1);
     expect(deck.slides).toHaveLength(100);
     expect(deck.slides.at(-1)?.pageNumber).toBe(100);

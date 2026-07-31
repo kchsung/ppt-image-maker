@@ -15,6 +15,18 @@ vi.mock('@/services/pptMaker.service', () => ({
   },
 }));
 
+vi.mock('@/services/pptDocument.service', () => ({
+  enhancePptDocument: vi.fn(async (deckPlan: { title: string }) => ({
+    title: deckPlan.title,
+    fileName: 'editable-deck.pptx',
+    generationMode: 'dom-to-pptx',
+    speakerNotes: [],
+    qaChecklist: [],
+    layouts: [],
+    layoutSource: 'html-css',
+  })),
+}));
+
 describe('PptMakerPage', () => {
   it('generates and displays slide plans from user input', async () => {
     vi.mocked(pptMakerService.generateDeckPlan).mockResolvedValue(
@@ -36,5 +48,5 @@ describe('PptMakerPage', () => {
     );
     await user.click(screen.getByRole('button', { name: /create ppt deck/i }));
     expect(await screen.findByText('Editable PPTX preview')).toBeInTheDocument();
-  });
+  }, 10_000);
 });

@@ -39,6 +39,8 @@ import { createLocalPptRequestAnalysis } from '@/utils/pptRequestAnalysis';
 const DEFAULT_SECTION_PLAN_CONCURRENCY = 2;
 const RATE_LIMITED_SECTION_PLAN_CONCURRENCY = 1;
 const SECTION_PLAN_MAX_ATTEMPTS = 3;
+const STANDARD_SECTION_PLAN_BATCH_SIZE = 4;
+const DETAILED_SECTION_PLAN_BATCH_SIZE = 2;
 
 function createImagePrompt(request: PptMakerRequest, slide: Omit<SlidePlan, 'imagePrompt'>): string {
   return [
@@ -99,7 +101,7 @@ export const pptMakerService: PptMakerService = {
               previousSlides: createBlueprintHandoff(blueprint, sectionIndex),
             },
           };
-          return generateSectionPlan(sectionRequest, section.title);
+          return generateSectionBatches(sectionRequest, blueprint, section, sectionIndex);
         },
       );
       const slides = linkSlideDependencies(sectionPlans.flatMap((sectionPlan) => sectionPlan.slides))
@@ -216,6 +218,55 @@ function createBlueprintHandoff(blueprint: PptDeckBlueprint, sectionIndex: numbe
     }));
 }
 
+async function generateSectionBatches(
+  request: PptMakerRequest,
+  blueprint: PptDeckBlueprint,
+  section: PptDeckBlueprint['sections'][number],
+  sectionIndex: number,
+): Promise<PptDeckPlan> {
+  const batchSize = getSectionPlanBatchSize(request);
+  const plans: PptDeckPlan[] = [];
+  let previousSlides = createBlueprintHandoff(blueprint, sectionIndex);
+
+  for (let offset = 0; offset < section.slideCount; offset += batchSize) {
+    const slideCount = Math.min(batchSize, section.slideCount - offset);
+    const batchRequest: PptMakerRequest = {
+      ...request,
+      planningBatch: {
+        sectionId: section.id,
+        startPage: section.slideStart + offset,
+        slideCount,
+        totalSlides: request.slideCount,
+        previousSlides,
+      },
+    };
+    const plan = await generateSectionPlan(batchRequest, section.title);
+    plans.push(plan);
+    previousSlides = plan.slides.slice(-2).map((slide) => ({
+      pageNumber: slide.pageNumber,
+      title: slide.title,
+      mainMessage: slide.mainMessage,
+      decision: slide.decision,
+    }));
+  }
+
+  const firstPlan = plans[0];
+  if (!firstPlan) throw new Error(`Slide copy planning returned no slides for section "${section.title}".`);
+  return {
+    ...firstPlan,
+    id: `section-${section.id}`,
+    title: section.title,
+    slides: plans.flatMap((plan) => plan.slides),
+    copyQa: {
+      ...firstPlan.copyQa,
+      checks: [
+        ...firstPlan.copyQa.checks,
+        `Planned section "${section.title}" in ${plans.length} bounded work batch(es) of up to ${batchSize} slides.`,
+      ],
+    },
+  };
+}
+
 async function generateSectionPlan(request: PptMakerRequest, sectionTitle: string): Promise<PptDeckPlan> {
   if (!supabase) throw new Error('Supabase is not configured.');
   for (let attempt = 0; attempt < SECTION_PLAN_MAX_ATTEMPTS; attempt += 1) {
@@ -225,7 +276,7 @@ async function generateSectionPlan(request: PptMakerRequest, sectionTitle: strin
 
     if (error) {
       const message = await getSupabaseFunctionErrorMessage(error);
-      if (isOpenAiRateLimitMessage(message) && attempt < SECTION_PLAN_MAX_ATTEMPTS - 1) {
+      if (isRetryableSectionPlanMessage(message) && attempt < SECTION_PLAN_MAX_ATTEMPTS - 1) {
         await wait(getPlanRetryDelayMs(message, attempt));
         continue;
       }
@@ -306,13 +357,26 @@ function getSectionPlanConcurrency(request: PptMakerRequest): number {
     : DEFAULT_SECTION_PLAN_CONCURRENCY;
 }
 
+function getSectionPlanBatchSize(request: PptMakerRequest): number {
+  return request.contentDensity === 'detailed'
+    ? DETAILED_SECTION_PLAN_BATCH_SIZE
+    : STANDARD_SECTION_PLAN_BATCH_SIZE;
+}
+
 function isOpenAiRateLimitMessage(message: string): boolean {
   return /rate limit|tokens per min|requests per min|too many requests|HTTP 429/iu.test(message);
 }
 
+function isRetryableSectionPlanMessage(message: string): boolean {
+  return isOpenAiRateLimitMessage(message) || /not having enough compute resources|function failed due to.*compute|HTTP 546/iu.test(message);
+}
+
 function getPlanRetryDelayMs(message: string, attempt: number): number {
   const match = message.match(/(?:retry after|try again in)\s*(\d+(?:\.\d+)?)\s*(?:seconds?|secs?|s)\b/iu);
-  const delayMs = match ? Math.ceil(Number(match[1]) * 1_000) : 2_000 * 2 ** attempt;
+  const fallbackDelayMs = /not having enough compute resources|function failed due to.*compute|HTTP 546/iu.test(message)
+    ? 3_000 * (attempt + 1)
+    : 2_000 * 2 ** attempt;
+  const delayMs = match ? Math.ceil(Number(match[1]) * 1_000) : fallbackDelayMs;
   return Math.min(60_000, Math.max(250, delayMs + 500));
 }
 

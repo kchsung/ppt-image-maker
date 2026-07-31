@@ -280,7 +280,7 @@ async function requestPlan(
     totalDeckSlideCount: getTotalSlideCount(request),
     activeSection,
     sectionBatch: request.planningBatch,
-    deckBlueprint: request.deckBlueprint,
+    deckBlueprint: getPlanningBlueprintContext(request.deckBlueprint, activeSection),
     contentDensity: request.contentDensity ?? 'light',
     targetLanguage: request.targetLanguage,
     topic: request.topic,
@@ -294,11 +294,11 @@ async function requestPlan(
     purposeTemplate: request.purposeTemplate,
     presentationGuide: request.presentationGuide,
     sourceDocument: request.sourceDocument,
-    sourceMaterialAnalysis: request.sourceMaterialAnalysis,
+    sourceMaterialAnalysis: getPlanningSourceAnalysis(request.sourceMaterialAnalysis),
     creationInstructions: request.creationInstructions ?? 'No additional instructions were provided.',
     styleReference: request.styleReference,
-    sourceText: request.sourceText,
-    previousSlides: priorSlides,
+    sourceText: getPlanningSourceExcerpt(request.sourceText),
+    previousSlides: priorSlides?.slice(-2),
     qaIssuesToFix: qaIssues,
     rules: [
       'First create a planning brief from topic, purpose, audience, presentation duration, document type, coreMessage, requiredSections, presentationGuide, creationInstructions, sourceMaterialAnalysis, and sourceText. Then form a persuasive, decision-oriented storyline. The returned text fields are the sole source for editable PowerPoint text.',
@@ -331,7 +331,7 @@ async function requestPlan(
   const requestBody = JSON.stringify({
     model,
     reasoning: { effort: 'low' },
-    max_output_tokens: 16384,
+    max_output_tokens: getPlanningOutputTokenBudget(requestedSlideCount, request.contentDensity),
     input: [{ role: 'user', content: [{ type: 'input_text', text: prompt }] }],
     text: {
       format: {
@@ -358,6 +358,42 @@ async function requestPlan(
   if (!output) throw new Error('OpenAI slide copy planning did not include text output.');
   if (output.trimStart().startsWith('<')) throw new Error('OpenAI returned HTML instead of Slide JSON.');
   return parsePlan(output);
+}
+
+function getPlanningOutputTokenBudget(slideCount: number, contentDensity: ContentDensity | undefined): number {
+  const perSlide = contentDensity === 'detailed' ? 1_350 : 1_050;
+  return Math.min(6_000, Math.max(2_800, 1_400 + slideCount * perSlide));
+}
+
+function getPlanningSourceExcerpt(sourceText: string): string {
+  const maxCharacters = 14_000;
+  if (sourceText.length <= maxCharacters) return sourceText;
+  const headLength = 10_000;
+  const tailLength = 3_500;
+  return `${sourceText.slice(0, headLength)}\n\n[Source excerpt shortened for this section planning batch]\n\n${sourceText.slice(-tailLength)}`;
+}
+
+function getPlanningSourceAnalysis(analysis: PptMakerRequest['sourceMaterialAnalysis']) {
+  if (!analysis) return undefined;
+  return {
+    summary: analysis.summary.slice(0, 1_500),
+    keyPoints: analysis.keyPoints.slice(0, 6),
+    dataPoints: analysis.dataPoints.slice(0, 6),
+    availableVisuals: analysis.availableVisuals.slice(0, 6),
+    sources: analysis.sources.slice(0, 12),
+  };
+}
+
+function getPlanningBlueprintContext(
+  blueprint: PptMakerRequest['deckBlueprint'] | undefined,
+  activeSection: ReturnType<typeof getActiveSection>,
+) {
+  if (!blueprint) return undefined;
+  return {
+    title: blueprint.title,
+    strategy: blueprint.strategy,
+    sections: activeSection ? [activeSection] : blueprint.sections.slice(0, 12),
+  };
 }
 
 function parseOpenAiResponse(rawPayload: string, status: number): Record<string, unknown> & { error?: { message?: string } } {

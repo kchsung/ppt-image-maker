@@ -356,7 +356,7 @@ describe('generate-ppt-slide-plan Edge Function', () => {
     expect(result.status).toBe(200);
     expect(body.slides).toHaveLength(requestedSlides);
     expect(fetchMock).toHaveBeenCalledTimes(4);
-    expect(JSON.parse(fetchMock.mock.calls[0][1].body).max_output_tokens).toBe(16384);
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body).max_output_tokens).toBe(6000);
   });
 
   it('plans one section batch with global page numbers instead of generating the whole deck at once', async () => {
