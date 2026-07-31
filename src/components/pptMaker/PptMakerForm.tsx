@@ -1,14 +1,16 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Check, ChevronLeft, ChevronRight, FileText, FileUp, ImageUp, LoaderCircle, Sparkles, X } from 'lucide-react';
+import { Check, ChevronLeft, ChevronRight, FileText, FileUp, ImageUp, LoaderCircle, ScanSearch, Sparkles, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/cn';
 import { getPresentationDesignGuide } from '@/mocks/presentationGuides.mock';
+import { getPresentationPurposeTemplate, presentationPurposeTemplates } from '@/mocks/presentationPurposeTemplates.mock';
 import type {
   ContentDensity,
-  PresentationIntent,
+  PresentationPurposeTemplateId,
+  PptClarifyingQuestion,
   PptMakerFormState,
   PptTemplate,
   StyleSourceMode,
@@ -20,12 +22,23 @@ interface PptMakerFormProps {
   form: PptMakerFormState;
   templates: PptTemplate[];
   isLoading: boolean;
+  isAnalyzingRequest: boolean;
   onChange: (patch: Partial<PptMakerFormState>) => void;
+  onAnalyzeRequest: () => void;
   onTemplateSelect: (template: PptTemplate) => void;
   onSubmit: () => void;
 }
 
-export function PptMakerForm({ form, templates, isLoading, onChange, onTemplateSelect, onSubmit }: PptMakerFormProps) {
+export function PptMakerForm({
+  form,
+  templates,
+  isLoading,
+  isAnalyzingRequest,
+  onChange,
+  onAnalyzeRequest,
+  onTemplateSelect,
+  onSubmit,
+}: PptMakerFormProps) {
   const selectedTemplateIndex = useMemo(() => {
     const index = templates.findIndex((template) => template.id === form.selectedTemplateId);
     return index >= 0 ? index : 0;
@@ -34,11 +47,17 @@ export function PptMakerForm({ form, templates, isLoading, onChange, onTemplateS
   const [sourceFileError, setSourceFileError] = useState<string | null>(null);
   const [isExtractingSource, setIsExtractingSource] = useState(false);
   const activeTemplate = templates[activeTemplateIndex] ?? templates[0];
-  const presentationGuide = getPresentationDesignGuide(form.presentationIntent);
+  const purposeTemplate = getPresentationPurposeTemplate(form.purposeTemplateId);
+  const presentationGuide = getPresentationDesignGuide(purposeTemplate.presentationIntent);
   const isActiveTemplateSelected = activeTemplate ? form.selectedTemplateId === activeTemplate.id : false;
   const hasStyleReference =
     form.styleSourceMode === 'template' ? Boolean(form.selectedTemplateId) : Boolean(form.styleImageDataUrl);
-  const canSubmit = form.sourceText.trim().length >= 40 && hasStyleReference && !isLoading;
+  const hasSource = form.sourceText.trim().length >= 40 || form.sourceAttachments.length > 0;
+  const unansweredClarifications = form.requestAnalysis?.clarifyingQuestions.filter(
+    (question) => question.required && !form.clarificationAnswers[question.id],
+  ) ?? [];
+  const attachmentAnalysisRequired = form.sourceAttachments.length > 0 && !form.sourceMaterialAnalysis;
+  const canSubmit = hasSource && hasStyleReference && !isLoading && !isAnalyzingRequest && !attachmentAnalysisRequired && unansweredClarifications.length === 0;
 
   useEffect(() => {
     setActiveTemplateIndex(selectedTemplateIndex);
@@ -58,16 +77,36 @@ export function PptMakerForm({ form, templates, isLoading, onChange, onTemplateS
     reader.readAsDataURL(file);
   };
 
-  const handleSourceDocumentChange = async (file: File | undefined) => {
-    if (!file) {
+  const handleSourceDocumentChange = async (files: FileList | null) => {
+    const selectedFiles = files ? Array.from(files).slice(0, 8) : [];
+    if (selectedFiles.length === 0) {
       return;
     }
 
     setIsExtractingSource(true);
     setSourceFileError(null);
     try {
-      const extracted = await extractSourceDocument(file);
-      onChange({ sourceText: extracted.text, sourceDocument: extracted.document });
+      const extractedDocuments = await Promise.all(selectedFiles.map((file) => extractSourceDocument(file)));
+      const newAttachments = extractedDocuments.map((document) => document.attachment);
+      const attachmentIds = new Set(form.sourceAttachments.map((attachment) => attachment.id));
+      const sourceAttachments = [
+        ...form.sourceAttachments,
+        ...newAttachments.filter((attachment) => !attachmentIds.has(attachment.id)),
+      ];
+      const extractedText = extractedDocuments
+        .filter((document) => document.attachment.type !== 'image' && document.text)
+        .map((document) => `[Source: ${document.document.name}]\n${document.text}`)
+        .join('\n\n');
+      const sourceText = [form.sourceText.trim(), extractedText].filter(Boolean).join('\n\n');
+      const lastTextDocument = [...extractedDocuments].reverse().find((document) => document.attachment.type !== 'image');
+      onChange({
+        sourceText,
+        sourceAttachments,
+        sourceDocument: lastTextDocument?.document ?? form.sourceDocument,
+        sourceMaterialAnalysis: null,
+        requestAnalysis: null,
+        clarificationAnswers: {},
+      });
     } catch (error) {
       setSourceFileError(error instanceof Error ? error.message : 'Could not read the selected document.');
     } finally {
@@ -93,6 +132,20 @@ export function PptMakerForm({ form, templates, isLoading, onChange, onTemplateS
     onChange({ styleSourceMode });
   };
 
+  const handlePurposeTemplateChange = (purposeTemplateId: PresentationPurposeTemplateId) => {
+    const selectedPurposeTemplate = getPresentationPurposeTemplate(purposeTemplateId);
+    onChange({
+      purposeTemplateId,
+      presentationIntent: selectedPurposeTemplate.presentationIntent,
+      documentType: selectedPurposeTemplate.documentType,
+      audience: selectedPurposeTemplate.defaultAudience,
+      purpose: selectedPurposeTemplate.defaultPurpose,
+      requiredSections: selectedPurposeTemplate.defaultOutline.join(', '),
+      requestAnalysis: null,
+      clarificationAnswers: {},
+    });
+  };
+
   const showPreviousTemplate = () => {
     setActiveTemplateIndex((currentIndex) => (currentIndex === 0 ? templates.length - 1 : currentIndex - 1));
   };
@@ -101,12 +154,33 @@ export function PptMakerForm({ form, templates, isLoading, onChange, onTemplateS
     setActiveTemplateIndex((currentIndex) => (currentIndex + 1) % templates.length);
   };
 
+  const handleClarificationAnswer = (question: PptClarifyingQuestion, value: string) => {
+    const patch: Partial<PptMakerFormState> = {
+      clarificationAnswers: { ...form.clarificationAnswers, [question.id]: value },
+    };
+
+    if (question.field === 'purpose') patch.purpose = value;
+    if (question.field === 'audience') patch.audience = value;
+    if (question.field === 'presentationDurationMinutes') {
+      const minutes = Number(value);
+      const minutesPerSlide = form.contentDensity === 'detailed' ? 2.5 : form.contentDensity === 'light' ? 1.25 : 1.75;
+      patch.presentationDurationMinutes = minutes;
+      patch.slideCount = Math.min(100, Math.max(2, Math.round(minutes / minutesPerSlide)));
+    }
+    if (question.field === 'contentDensity') patch.contentDensity = value as ContentDensity;
+    if (question.field === 'styleNotes') {
+      patch.styleNotes = form.styleNotes.includes(value) ? form.styleNotes : `${form.styleNotes}\n${value}`.trim();
+    }
+
+    onChange(patch);
+  };
+
   return (
     <Card>
       <CardHeader>
         <h2 className="text-base font-bold text-primary">Source and style</h2>
         <p className="mt-1 text-sm text-text-subtle">
-          Paste lecture notes or slide text, then define the audience and style language.
+          Paste notes or attach source files. Text, tables, and visual references are carried into production planning.
         </p>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -115,15 +189,16 @@ export function PptMakerForm({ form, templates, isLoading, onChange, onTemplateS
             <span className="block text-sm font-semibold text-text-main">Source</span>
             <label className="inline-flex cursor-pointer items-center gap-2 rounded-md border border-border bg-surface px-3 py-2 text-sm font-semibold text-text-subtle transition hover:border-primary hover:text-primary">
               {isExtractingSource ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <FileUp className="h-4 w-4" />}
-              {isExtractingSource ? 'Reading document...' : 'Upload DOCX, PDF, or PPTX'}
+              {isExtractingSource ? 'Reading sources...' : 'Add source files'}
               <input
-                aria-label="Source document"
+                aria-label="Source files"
                 className="sr-only"
                 type="file"
-                accept=".docx,.pdf,.pptx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.presentationml.presentation"
+                multiple
+                accept=".docx,.pdf,.pptx,.xlsx,.png,.jpg,.jpeg,.webp,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.presentationml.presentation,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,image/png,image/jpeg,image/webp"
                 disabled={isExtractingSource}
                 onChange={(event) => {
-                  void handleSourceDocumentChange(event.target.files?.[0]);
+                  void handleSourceDocumentChange(event.target.files);
                   event.currentTarget.value = '';
                 }}
               />
@@ -132,29 +207,133 @@ export function PptMakerForm({ form, templates, isLoading, onChange, onTemplateS
           <Textarea
             aria-label="Source text"
             value={form.sourceText}
-            placeholder="Paste source material or upload a DOCX, PDF, or PPTX file..."
-            onChange={(event) => onChange({ sourceText: event.target.value })}
+            placeholder="Paste source material or add PDF, DOCX, PPTX, XLSX, or image files..."
+            onChange={(event) => onChange({ sourceText: event.target.value, sourceMaterialAnalysis: null, requestAnalysis: null, clarificationAnswers: {} })}
           />
-          {form.sourceDocument ? (
-            <div className="flex items-center gap-2 rounded-md border border-border bg-surface-muted px-3 py-2 text-sm text-text-subtle">
-              <FileText className="h-4 w-4 text-primary" />
-              <span className="min-w-0 flex-1 truncate">{form.sourceDocument.name}</span>
-              <span className="shrink-0 text-xs">{form.sourceDocument.extractedCharacterCount.toLocaleString()} characters extracted</span>
-              <Button
-                type="button"
-                variant="ghost"
-                className="h-7 w-7 px-0"
-                onClick={() => onChange({ sourceDocument: null })}
-                aria-label="Remove source document"
-              >
-                <X className="h-4 w-4" />
-              </Button>
+          {form.sourceAttachments.length > 0 ? (
+            <div className="space-y-2">
+              {form.sourceAttachments.map((attachment) => (
+                <div key={attachment.id} className="flex items-center gap-2 rounded-md border border-border bg-surface-muted px-3 py-2 text-sm text-text-subtle">
+                  {attachment.imageDataUrl ? (
+                    <img src={attachment.imageDataUrl} alt="" className="h-9 w-12 rounded border border-border object-cover" />
+                  ) : attachment.type === 'image' ? <ImageUp className="h-4 w-4 text-primary" /> : <FileText className="h-4 w-4 text-primary" />}
+                  <span className="min-w-0 flex-1 truncate">{attachment.name}</span>
+                  <span className="shrink-0 text-xs">
+                    {attachment.type.toUpperCase()} · {attachment.extractedCharacterCount.toLocaleString()} text · {attachment.tableCount} tables
+                  </span>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    className="h-7 w-7 px-0"
+                    onClick={() => onChange({
+                      sourceAttachments: form.sourceAttachments.filter((item) => item.id !== attachment.id),
+                      sourceDocument: form.sourceDocument?.name === attachment.name ? null : form.sourceDocument,
+                      sourceMaterialAnalysis: null,
+                      requestAnalysis: null,
+                      clarificationAnswers: {},
+                    })}
+                    aria-label={`Remove ${attachment.name}`}
+                  >
+                    <X className="h-4 w-4" />
+                  </Button>
+                </div>
+              ))}
             </div>
           ) : null}
           {sourceFileError ? <p className="text-sm font-medium text-accent">{sourceFileError}</p> : null}
+          {attachmentAnalysisRequired ? <p className="text-sm font-medium text-accent">Analyze the uploaded materials before creating the deck.</p> : null}
+        </div>
+
+        <div className="rounded-md border border-primary/20 bg-surface-muted p-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <p className="text-sm font-bold text-primary">PPT production conditions</p>
+              <p className="mt-1 text-sm text-text-subtle">
+                Extract the topic, purpose, audience, presentation duration, recommended slide count, and document type from the source and instructions.
+              </p>
+            </div>
+            <Button type="button" variant="secondary" disabled={!hasSource || isLoading || isAnalyzingRequest} onClick={onAnalyzeRequest}>
+              {isAnalyzingRequest ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <ScanSearch className="h-4 w-4" />}
+              {isAnalyzingRequest ? 'Analyzing request...' : 'Analyze request'}
+            </Button>
+          </div>
+          {form.requestAnalysis ? (
+            <div className="mt-4 grid gap-2 text-sm sm:grid-cols-2 lg:grid-cols-3">
+              {[
+                ['Topic', form.requestAnalysis.topic],
+                ['Document type', form.requestAnalysis.documentType],
+                ['Duration', form.requestAnalysis.presentationDurationMinutes ? `${form.requestAnalysis.presentationDurationMinutes} min` : 'Not detected'],
+                ['Slide count', `${form.requestAnalysis.slideCount} slides`],
+                ['Audience', form.requestAnalysis.audience],
+                ['Purpose', form.requestAnalysis.purpose],
+              ].map(([label, value]) => (
+                <div key={label} className="rounded-md border border-border bg-surface px-3 py-2">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-text-subtle">{label}</p>
+                  <p className="mt-1 font-semibold text-text-main">{value}</p>
+                </div>
+              ))}
+            </div>
+          ) : null}
+          {form.sourceMaterialAnalysis ? (
+            <div className="mt-4 rounded-md border border-border bg-surface p-4">
+              <p className="text-sm font-bold text-primary">Extracted material</p>
+              <p className="mt-2 text-sm leading-6 text-text-subtle">{form.sourceMaterialAnalysis.summary}</p>
+              <div className="mt-3 grid gap-3 lg:grid-cols-3">
+                <SourceAnalysisList title="Key points" values={form.sourceMaterialAnalysis.keyPoints} />
+                <SourceAnalysisList title="Usable data" values={form.sourceMaterialAnalysis.dataPoints} />
+                <SourceAnalysisList title="Visual references" values={form.sourceMaterialAnalysis.availableVisuals} />
+              </div>
+              {form.sourceMaterialAnalysis.sources?.length ? <div className="mt-3 border-t border-border pt-3"><p className="text-sm font-semibold text-text-main">Source records</p><div className="mt-2 space-y-1 text-sm text-text-subtle">{form.sourceMaterialAnalysis.sources.map((source) => <p key={source.id}><span className="font-semibold text-text-main">{source.sourceName}</span> · {source.documentName} · {source.publicationYear ?? 'Year not recorded'} · checked {source.verifiedAt}{source.url ? ` · ${source.url}` : ''}</p>)}</div></div> : null}
+            </div>
+          ) : null}
+          {form.requestAnalysis?.clarifyingQuestions.length ? (
+            <div className="mt-4 border-t border-border pt-4">
+              <p className="text-sm font-bold text-text-main">Complete the missing conditions</p>
+              <p className="mt-1 text-sm text-text-subtle">
+                Choose an answer for every required item before the deck can be planned.
+              </p>
+              <div className="mt-3 space-y-3">
+                {form.requestAnalysis.clarifyingQuestions.map((question) => {
+                  const selectedAnswer = form.clarificationAnswers[question.id];
+                  return (
+                    <div key={question.id} className="rounded-md border border-border bg-surface p-3">
+                      <div className="flex items-center gap-2">
+                        <p className="text-sm font-semibold text-text-main">{question.question}</p>
+                        {question.required ? <span className="rounded-full bg-accent-muted px-2 py-0.5 text-xs font-bold text-accent">Required</span> : null}
+                      </div>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {question.options.map((option) => (
+                          <Button
+                            key={option.value}
+                            type="button"
+                            variant={selectedAnswer === option.value ? 'primary' : 'secondary'}
+                            className="h-8 px-3 text-xs"
+                            onClick={() => handleClarificationAnswer(question, option.value)}
+                          >
+                            {option.label}
+                          </Button>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              {unansweredClarifications.length ? (
+                <p className="mt-3 text-sm font-semibold text-accent">
+                  {unansweredClarifications.length} required condition{unansweredClarifications.length === 1 ? '' : 's'} still need confirmation.
+                </p>
+              ) : (
+                <p className="mt-3 text-sm font-semibold text-success">All required production conditions are confirmed.</p>
+              )}
+            </div>
+          ) : null}
         </div>
 
         <div className="grid gap-4 sm:grid-cols-2">
+          <label className="block sm:col-span-2">
+            <span className="mb-1 block text-sm font-semibold text-text-main">Topic</span>
+            <Input value={form.topic} placeholder="The central subject of this presentation" onChange={(event) => onChange({ topic: event.target.value })} />
+          </label>
           <label className="block">
             <span className="mb-1 block text-sm font-semibold text-text-main">Audience</span>
             <Input
@@ -173,17 +352,31 @@ export function PptMakerForm({ form, templates, isLoading, onChange, onTemplateS
 
         <div className="grid gap-4 sm:grid-cols-2">
           <label className="block">
-            <span className="mb-1 block text-sm font-semibold text-text-main">Presentation format</span>
+            <span className="mb-1 block text-sm font-semibold text-text-main">PPT purpose template</span>
             <select
+              aria-label="PPT purpose template"
               className="h-10 w-full rounded-md border border-border bg-surface px-3 text-sm outline-none focus:border-primary"
-              value={form.presentationIntent ?? 'education-lecture'}
-              onChange={(event) => onChange({ presentationIntent: event.target.value as PresentationIntent })}
+              value={purposeTemplate.id}
+              onChange={(event) => handlePurposeTemplateChange(event.target.value as PresentationPurposeTemplateId)}
             >
-              <option value="executive-proposal">B2B executive proposal</option>
-              <option value="strategy-decision">Strategy decision deck</option>
-              <option value="education-lecture">Education lecture</option>
-              <option value="investment-deck">Investment or IR deck</option>
-              <option value="implementation-roadmap">Implementation roadmap</option>
+              {Object.values(presentationPurposeTemplates).map((template) => (
+                <option key={template.id} value={template.id}>{template.name}</option>
+              ))}
+            </select>
+          </label>
+          <label className="block">
+            <span className="mb-1 block text-sm font-semibold text-text-main">Document type</span>
+            <select
+              disabled
+              className="h-10 w-full rounded-md border border-border bg-surface px-3 text-sm outline-none focus:border-primary"
+              value={purposeTemplate.documentType}
+            >
+              <option value="proposal">Proposal</option>
+              <option value="strategy">Strategy deck</option>
+              <option value="lecture">Lecture or training</option>
+              <option value="investment">Investment or IR deck</option>
+              <option value="roadmap">Implementation roadmap</option>
+              <option value="report">Report</option>
             </select>
           </label>
           <label className="block">
@@ -196,6 +389,17 @@ export function PptMakerForm({ form, templates, isLoading, onChange, onTemplateS
               <option value="English">English</option>
               <option value="Korean">Korean</option>
             </select>
+          </label>
+          <label className="block">
+            <span className="mb-1 block text-sm font-semibold text-text-main">Presentation duration (minutes)</span>
+            <Input
+              min={1}
+              max={480}
+              type="number"
+              value={form.presentationDurationMinutes ?? ''}
+              placeholder="For example: 30"
+              onChange={(event) => onChange({ presentationDurationMinutes: event.target.value ? Number(event.target.value) : null })}
+            />
           </label>
           <label className="block">
             <span className="mb-1 block text-sm font-semibold text-text-main">Slide count</span>
@@ -242,15 +446,33 @@ export function PptMakerForm({ form, templates, isLoading, onChange, onTemplateS
         </label>
 
         <div className="rounded-md border border-primary/20 bg-surface-muted p-4">
-          <p className="text-xs font-bold uppercase tracking-wide text-accent">Default planning and design guide</p>
-          <h3 className="mt-1 text-base font-bold text-primary">{presentationGuide.name}</h3>
-          <p className="mt-2 text-sm leading-6 text-text-main">{presentationGuide.narrativeGuide}</p>
-          <p className="mt-2 text-sm leading-6 text-text-subtle">{presentationGuide.visualGuide}</p>
+          <p className="text-xs font-bold uppercase tracking-wide text-accent">Purpose template and planning contract</p>
+          <h3 className="mt-1 text-base font-bold text-primary">{purposeTemplate.name}</h3>
+          <p className="mt-2 text-sm leading-6 text-text-main">{purposeTemplate.description}</p>
+          <div className="mt-3 grid gap-3 lg:grid-cols-2">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wide text-text-subtle">Default outline</p>
+              <ol className="mt-2 grid gap-2 text-sm text-text-subtle sm:grid-cols-2">
+                {purposeTemplate.defaultOutline.map((section, index) => (
+                  <li key={section} className="rounded-md border border-border bg-surface px-3 py-2">
+                    <span className="mr-2 font-bold text-primary">{index + 1}.</span>{section}
+                  </li>
+                ))}
+              </ol>
+            </div>
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wide text-text-subtle">Composition rules</p>
+              <ul className="mt-2 grid gap-2 text-sm text-text-subtle">
+                {purposeTemplate.compositionRules.map((rule) => (
+                  <li key={rule} className="rounded-md border border-border bg-surface px-3 py-2">{rule}</li>
+                ))}
+              </ul>
+            </div>
+          </div>
+          <p className="mt-3 text-sm leading-6 text-text-subtle">{presentationGuide.narrativeGuide}</p>
           <ul className="mt-3 grid gap-2 text-sm text-text-subtle sm:grid-cols-3">
             {presentationGuide.slideRules.map((rule) => (
-              <li key={rule} className="rounded-md border border-border bg-surface px-3 py-2">
-                {rule}
-              </li>
+              <li key={rule} className="rounded-md border border-border bg-surface px-3 py-2">{rule}</li>
             ))}
           </ul>
         </div>
@@ -461,5 +683,18 @@ export function PptMakerForm({ form, templates, isLoading, onChange, onTemplateS
         </Button>
       </CardContent>
     </Card>
+  );
+}
+
+function SourceAnalysisList({ title, values }: { title: string; values: string[] }) {
+  return (
+    <div className="rounded-md bg-surface-muted p-3">
+      <p className="text-xs font-bold uppercase tracking-wide text-text-subtle">{title}</p>
+      {values.length > 0 ? (
+        <ul className="mt-2 space-y-1 text-sm text-text-main">
+          {values.slice(0, 4).map((value) => <li key={value}>• {value}</li>)}
+        </ul>
+      ) : <p className="mt-2 text-sm text-text-subtle">No material detected</p>}
+    </div>
   );
 }

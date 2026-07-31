@@ -22,8 +22,19 @@ describe('PPT Maker mock data', () => {
     const imageDataUrl = createMockSlideImageDataUrl(deck.slides[0]);
     const svg = decodeURIComponent(escape(atob(imageDataUrl.split(',')[1])));
 
-    expect(svg).toContain('AI-Ready Judgment');
+    expect(svg).toContain('AI accelerates execution');
     expect(svg).toContain('LOGO');
     expect(svg).toContain('AI draft');
+  });
+
+  it.each([
+    ['light', 3],
+    ['standard', 4],
+    ['detailed', 5],
+  ] as const)('creates the expected proof points for %s density', (contentDensity, expectedProofPointCount) => {
+    const deck = createMockDeckPlan({ ...samplePptMakerRequest, slideCount: 4, contentDensity });
+
+    expect(deck.slides.every((slide) => slide.contentBlocks.length === expectedProofPointCount)).toBe(true);
+    expect(deck.slides.every((slide) => slide.labels.length === expectedProofPointCount)).toBe(true);
   });
 });

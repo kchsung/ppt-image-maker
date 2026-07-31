@@ -2,10 +2,12 @@ import type {
   PptDeckPlan,
   PptMakerRequest,
   SlideArchetype,
+  SlideRole,
   SlidePlan,
   SlideVisualStructure,
   StyleReference,
 } from '@/types/models/pptMaker.model';
+import { deriveSlideDiagram, improveSlideTitle, linkSlideDependencies, selectSlideMasterLayout } from '@/utils/pptMaker';
 
 export const defaultStyleReference: StyleReference = {
   id: 'qlearn-gpc-style',
@@ -225,27 +227,33 @@ export function createMockDeckPlan(
   const slides = Array.from({ length: count }, (_, index) => {
     const pageNumber = index + 1;
     const copy = copies[index % copies.length];
+    const proofPointLabels = createMockProofPointLabels(copy.labels, request.targetLanguage, request.contentDensity);
     const archetype = getMockArchetype(pageNumber, count);
     const visualStructure = getMockVisualStructure(pageNumber, count, archetype);
+    const slideRole = getMockSlideRole(pageNumber, count, visualStructure);
 
-    return {
+    const slide = {
       id: `slide-${pageNumber}`,
       pageNumber,
       archetype,
+      slideRole,
       visualStructure,
+      masterLayout: selectSlideMasterLayout({ pageNumber, archetype, slideRole, visualStructure }, count),
       ...copy,
+      title: improveSlideTitle(copy.title, copy.mainMessage, request.targetLanguage),
+      labels: proofPointLabels,
       objective: request.targetLanguage === 'Korean'
-        ? `${copy.labels[0] ?? '우선과제'}에 대한 핵심 판단과 실행 방향을 명확히 합의합니다.`
-        : `Help the audience understand and act on ${copy.labels[0] ?? 'the priority'}.`,
-      contentBlocks: copy.labels.map((heading, blockIndex) => ({
+        ? `${proofPointLabels[0] ?? '우선과제'}에 대한 핵심 판단과 실행 방향을 명확히 합의합니다.`
+        : `Help the audience understand and act on ${proofPointLabels[0] ?? 'the priority'}.`,
+      contentBlocks: proofPointLabels.map((heading, blockIndex) => ({
         heading,
         detail: request.targetLanguage === 'Korean'
           ? blockIndex === 0
             ? `${heading}이 이 장표에서 시작해야 할 핵심 근거를 설명합니다.`
             : `${heading}은 주요 메시지를 뒷받침하는 실행 근거를 제공합니다.`
           : blockIndex === 0
-            ? `${heading} explains the critical starting point for this slide.`
-            : `${heading} provides a practical proof point that supports the main message.`,
+            ? `${heading} defines the starting point for this decision.`
+            : `${heading} links evidence to the next action.`,
       })),
       decision: request.targetLanguage === 'Korean'
         ? `${copy.labels[0] ?? '우선과제'}에 대한 다음 실행과 책임 주체를 합의합니다.`
@@ -258,6 +266,8 @@ export function createMockDeckPlan(
       },
       imagePrompt: '',
     } satisfies SlidePlan;
+
+    return { ...slide, diagram: deriveSlideDiagram(slide) };
   });
 
   return {
@@ -281,7 +291,7 @@ export function createMockDeckPlan(
         { phase: 'Action', purpose: 'Close with an accountable next step.', slideNumbers: [count] },
       ],
     },
-    slides,
+    slides: linkSlideDependencies(slides),
     copyQa: {
       status: 'passed',
       checks: [
@@ -320,6 +330,17 @@ export function createMockSlideImageDataUrl(slide: SlidePlan): string {
   return `data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(svg)))}`;
 }
 
+function createMockProofPointLabels(
+  labels: string[],
+  language: PptMakerRequest['targetLanguage'],
+  contentDensity: PptMakerRequest['contentDensity'],
+): string[] {
+  const expectedCount = contentDensity === 'detailed' ? 5 : contentDensity === 'standard' ? 4 : 3;
+  return Array.from({ length: expectedCount }, (_, index) => labels[index] ?? (
+    language === 'Korean' ? `추가 검증 ${index + 1}` : `Supporting evidence ${index + 1}`
+  ));
+}
+
 function getMockArchetype(pageNumber: number, totalSlides: number): SlideArchetype {
   if (pageNumber === 1) return 'cover';
   if (pageNumber === totalSlides) return 'closing';
@@ -346,6 +367,32 @@ function getMockVisualStructure(
   };
 
   return structureByArchetype[archetype as Exclude<SlideArchetype, 'cover' | 'closing'>];
+}
+
+function getMockSlideRole(
+  pageNumber: number,
+  totalSlides: number,
+  visualStructure: SlideVisualStructure,
+): SlideRole {
+  if (pageNumber === 1) return 'opening';
+  if (pageNumber === totalSlides) return 'conclusion';
+
+  const roleByStructure: Record<SlideVisualStructure, SlideRole> = {
+    'hero-visual': 'opening',
+    'message-emphasis': 'context',
+    'card-grid': 'solution',
+    'side-by-side-comparison': 'comparison',
+    'numbered-process': 'implementation',
+    'before-after-mapping': 'problem-framing',
+    'hub-and-spoke': 'solution',
+    'metrics-dashboard': 'evidence',
+    roadmap: 'implementation',
+    'pyramid-framework': 'solution',
+    'case-story': 'case-study',
+    'closing-commitment': 'conclusion',
+  };
+
+  return roleByStructure[visualStructure];
 }
 
 function createMockComposition(structure: SlideVisualStructure, labels: string[]): string {

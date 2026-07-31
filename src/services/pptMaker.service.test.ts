@@ -37,6 +37,6 @@ describe('pptMakerService', () => {
 
     expect(deck.copyQa.status).toBe('passed');
     expect(getDeckCopyQaIssues(deck)).toEqual([]);
-    expect(deck.slides[0].title).toBe('AI 판단과 실행');
+    expect(deck.slides[0].title).toBe('AI 판단과 실행으로 실행력을 높입니다');
   });
 });

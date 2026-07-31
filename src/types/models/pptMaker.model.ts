@@ -4,12 +4,46 @@ export type ContentDensity = 'light' | 'standard' | 'detailed';
 
 export type PresentationIntent = 'executive-proposal' | 'strategy-decision' | 'education-lecture' | 'investment-deck' | 'implementation-roadmap';
 
+export type PresentationDocumentType =
+  | 'proposal'
+  | 'strategy'
+  | 'lecture'
+  | 'investment'
+  | 'roadmap'
+  | 'report';
+
+export type PresentationPurposeTemplateId =
+  | 'ir'
+  | 'business-proposal'
+  | 'company-profile'
+  | 'results-report'
+  | 'education-material';
+
+export type PptClarificationField =
+  | 'purpose'
+  | 'audience'
+  | 'presentationDurationMinutes'
+  | 'contentDensity'
+  | 'styleNotes';
+
 export interface PresentationDesignGuide {
   id: PresentationIntent;
   name: string;
   narrativeGuide: string;
   visualGuide: string;
   slideRules: string[];
+}
+
+export interface PresentationPurposeTemplate {
+  id: PresentationPurposeTemplateId;
+  name: string;
+  description: string;
+  documentType: PresentationDocumentType;
+  presentationIntent: PresentationIntent;
+  defaultAudience: string;
+  defaultPurpose: string;
+  defaultOutline: string[];
+  compositionRules: string[];
 }
 
 export type SlideArchetype =
@@ -21,6 +55,18 @@ export type SlideArchetype =
   | 'before-after'
   | 'case-dashboard'
   | 'closing';
+
+export type SlideRole =
+  | 'opening'
+  | 'context'
+  | 'problem-framing'
+  | 'evidence'
+  | 'comparison'
+  | 'solution'
+  | 'implementation'
+  | 'case-study'
+  | 'decision'
+  | 'conclusion';
 
 export type SlideVisualStructure =
   | 'hero-visual'
@@ -35,6 +81,112 @@ export type SlideVisualStructure =
   | 'pyramid-framework'
   | 'case-story'
   | 'closing-commitment';
+
+export type SlideContentClassification =
+  | 'comparison'
+  | 'process'
+  | 'timeline'
+  | 'structure'
+  | 'data'
+  | 'case'
+  | 'message';
+
+export type SlideDiagramType =
+  | 'none'
+  | 'process'
+  | 'cycle'
+  | 'hierarchy'
+  | 'timeline'
+  | 'relationship'
+  | 'change';
+
+export interface SlideDiagramSpec {
+  type: SlideDiagramType;
+  rationale: string;
+  nodes: string[];
+}
+
+export type SlideTableEmphasis = 'none' | 'difference' | 'key-result';
+
+export interface SlideComparisonTableRow {
+  criterion: string;
+  values: string[];
+  emphasis: SlideTableEmphasis;
+}
+
+export interface SlideComparisonTableSpec {
+  rationale: string;
+  columnHeaders: string[];
+  rows: SlideComparisonTableRow[];
+  highlightedRowIndex: number | null;
+  keyResult: string;
+}
+
+export type SlideChartPurpose = 'comparison' | 'trend' | 'composition' | 'distribution' | 'target-progress';
+
+export type SlideChartType = 'bar' | 'line' | 'donut' | 'histogram' | 'progress';
+
+export interface SlideChartDatum {
+  label: string;
+  value: number;
+}
+
+export interface SlideChartSpec {
+  purpose: SlideChartPurpose;
+  type: SlideChartType;
+  rationale: string;
+  series: SlideChartDatum[];
+  targetValue: number | null;
+  highlightedIndex: number | null;
+  unit: string;
+  keyResult: string;
+}
+
+export type SlideMetricDirection = 'up' | 'down' | 'neutral';
+
+export interface SlideKeyMetricSpec {
+  label: string;
+  displayValue: string;
+  numericValue: number;
+  changeText: string | null;
+  direction: SlideMetricDirection;
+  comparisonText: string;
+  rationale: string;
+}
+
+export type SlideLayoutFamily =
+  | 'hero'
+  | 'message'
+  | 'card'
+  | 'comparison'
+  | 'process'
+  | 'timeline'
+  | 'structure'
+  | 'data'
+  | 'case'
+  | 'closing';
+
+export type SlideMasterLayoutId =
+  | 'cover'
+  | 'agenda'
+  | 'section'
+  | 'content'
+  | 'comparison'
+  | 'chart'
+  | 'conclusion';
+
+export interface SlideMasterLayoutDefinition {
+  id: SlideMasterLayoutId;
+  name: string;
+  purpose: string;
+  supportedVisualStructures: SlideVisualStructure[];
+}
+
+export interface SlideLayoutSelection {
+  classification: SlideContentClassification;
+  family: SlideLayoutFamily;
+  rationale: string;
+}
 
 export type SlideImagePlacement =
   | 'right-hero'
@@ -56,6 +208,13 @@ export interface SlideContentBlock {
   detail: string;
 }
 
+export interface SlideDependency {
+  previousSlideNumber: number | null;
+  questionAddressed: string;
+  answerSummary: string;
+  nextQuestion: string | null;
+}
+
 export interface DeckStrategy {
   coreThesis: string;
   audienceNeed: string;
@@ -70,6 +229,8 @@ export interface DeckStrategy {
 export interface DeckSection {
   id: string;
   title: string;
+  role?: string;
+  keyQuestion?: string;
   purpose: string;
   keyMessage: string;
   slideStart: number;
@@ -104,12 +265,40 @@ export interface TemplateDesignProfile {
 
 export type StyleSourceMode = 'template' | 'upload';
 
-export type SourceDocumentType = 'docx' | 'pdf' | 'pptx';
+export type SourceDocumentType = 'docx' | 'pdf' | 'pptx' | 'xlsx' | 'image';
 
 export interface SourceDocument {
   name: string;
   type: SourceDocumentType;
   extractedCharacterCount: number;
+}
+
+export interface SourceAttachment extends SourceDocument {
+  id: string;
+  tableCount: number;
+  imageCount: number;
+  imageDataUrl?: string;
+  sourceReference?: SourceReference;
+}
+
+export type SourceReferenceStatus = 'complete' | 'incomplete';
+
+export interface SourceReference {
+  id: string;
+  sourceName: string;
+  documentName: string;
+  publicationYear: number | null;
+  url: string | null;
+  verifiedAt: string;
+  metadataStatus: SourceReferenceStatus;
+}
+
+export interface SourceMaterialAnalysis {
+  summary: string;
+  keyPoints: string[];
+  dataPoints: string[];
+  availableVisuals: string[];
+  sources?: SourceReference[];
 }
 
 export interface PptTemplate {
@@ -134,16 +323,22 @@ export interface PptPlanningBatch {
 export interface PptMakerRequest {
   sourceText: string;
   sourceDocument?: SourceDocument;
+  sourceAttachments?: SourceAttachment[];
+  sourceMaterialAnalysis?: SourceMaterialAnalysis;
   creationInstructions?: string;
   targetLanguage: TargetLanguage;
+  topic?: string;
   audience: string;
   purpose: string;
+  presentationDurationMinutes?: number;
+  documentType?: PresentationDocumentType;
   slideCount: number;
   contentDensity?: ContentDensity;
   presentationIntent?: PresentationIntent;
   coreMessage?: string;
   requiredSections?: string;
   presentationGuide?: PresentationDesignGuide;
+  purposeTemplate?: PresentationPurposeTemplate;
   deckBlueprint?: PptDeckBlueprint;
   planningBatch?: PptPlanningBatch;
   styleReference: StyleReference;
@@ -151,13 +346,49 @@ export interface PptMakerRequest {
   styleImageUrl?: string;
   selectedTemplateId?: string;
   logoImageDataUrl?: string;
+  clarificationAnswers?: Record<string, string>;
+}
+
+export interface PptRequestAnalysis {
+  topic: string;
+  purpose: string;
+  audience: string;
+  presentationDurationMinutes: number | null;
+  slideCount: number;
+  documentType: PresentationDocumentType;
+  presentationIntent: PresentationIntent;
+  contentDensity: ContentDensity;
+  coreMessage: string;
+  requiredSections: string;
+  rationale: string[];
+  sourceMaterialAnalysis: SourceMaterialAnalysis;
+  clarifyingQuestions: PptClarifyingQuestion[];
+}
+
+export interface PptClarifyingQuestion {
+  id: string;
+  field: PptClarificationField;
+  question: string;
+  required: boolean;
+  options: Array<{
+    label: string;
+    value: string;
+  }>;
 }
 
 export interface SlidePlan {
   id: string;
   pageNumber: number;
   archetype: SlideArchetype;
+  slideRole?: SlideRole;
+  dependency?: SlideDependency;
   visualStructure: SlideVisualStructure;
+  diagram?: SlideDiagramSpec;
+  comparisonTable?: SlideComparisonTableSpec;
+  chart?: SlideChartSpec;
+  keyMetric?: SlideKeyMetricSpec;
+  layoutSelection?: SlideLayoutSelection;
+  masterLayout?: SlideMasterLayoutId;
   mainMessage: string;
   title: string;
   subtitle: string;
@@ -168,6 +399,7 @@ export interface SlidePlan {
   takeaway: string;
   imageSlot: SlideImageSlot;
   imagePrompt: string;
+  sourceIds?: string[];
 }
 
 export interface PptDeckPlan {
@@ -185,6 +417,33 @@ export interface PptCopyQaResult {
   status: 'passed' | 'needs-review';
   checks: string[];
   issues: string[];
+  redundancySuggestions?: PptRedundancySuggestion[];
+  coverageSuggestions?: PptCoverageSuggestion[];
+}
+
+export type PptRedundancyKind = 'title' | 'message' | 'case' | 'diagram';
+
+export type PptRedundancyAction = 'merge' | 'remove' | 'separate-role';
+
+export interface PptRedundancySuggestion {
+  id: string;
+  slideNumbers: [number, number];
+  kind: PptRedundancyKind;
+  action: PptRedundancyAction;
+  confidence: number;
+  summary: string;
+}
+
+export type PptCoverageKind = 'solution' | 'feature' | 'kpi' | 'impact';
+
+export interface PptCoverageSuggestion {
+  id: string;
+  problemSlideNumbers: number[];
+  kind: PptCoverageKind;
+  severity: 'required' | 'recommended';
+  recommendedSlideRole: SlideRole;
+  recommendedVisualStructure: SlideVisualStructure;
+  summary: string;
 }
 
 export interface GeneratedSlideImage {
@@ -298,13 +557,19 @@ export interface PptEditableSlideLayout {
 export interface PptMakerFormState {
   sourceText: string;
   sourceDocument: SourceDocument | null;
+  sourceAttachments: SourceAttachment[];
+  sourceMaterialAnalysis: SourceMaterialAnalysis | null;
   creationInstructions: string;
   targetLanguage: TargetLanguage;
+  topic: string;
   audience: string;
   purpose: string;
+  presentationDurationMinutes: number | null;
+  documentType: PresentationDocumentType;
   slideCount: number;
   contentDensity: ContentDensity;
   presentationIntent: PresentationIntent;
+  purposeTemplateId?: PresentationPurposeTemplateId;
   coreMessage: string;
   requiredSections: string;
   styleNotes: string;
@@ -312,4 +577,6 @@ export interface PptMakerFormState {
   selectedTemplateId: string | null;
   styleImageDataUrl: string | null;
   logoImageDataUrl: string | null;
+  requestAnalysis: PptRequestAnalysis | null;
+  clarificationAnswers: Record<string, string>;
 }

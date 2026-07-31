@@ -9,6 +9,7 @@ import { PptMakerForm } from '@/components/pptMaker/PptMakerForm';
 import { Button } from '@/components/ui/button';
 import {
   enhanceGeneratedPptDocument,
+  analyzePptRequest,
   generateDeckPlan,
   registerPresentationJob,
   resetDeckPlan,
@@ -24,10 +25,11 @@ type PptMakerTab = 'input' | 'output';
 export function PptMakerPage() {
   const dispatch = useAppDispatch();
   const [activeTab, setActiveTab] = useState<PptMakerTab>('input');
-  const { form, deckPlan, documentEnhancement, status, documentStatus, error } = useAppSelector(
+  const { form, deckPlan, documentEnhancement, status, documentStatus, analysisStatus, error } = useAppSelector(
     (state) => state.pptMaker,
   );
   const isGenerating = status === 'loading' || documentStatus === 'loading';
+  const isAnalyzingRequest = analysisStatus === 'loading';
 
   const handleSubmit = () => {
     setActiveTab('output');
@@ -54,6 +56,13 @@ export function PptMakerPage() {
     );
   };
 
+  const handleRequestAnalysis = () => {
+    void dispatch(analyzePptRequest(form))
+      .unwrap()
+      .then(() => toast.success('PPT production conditions were extracted and applied.'))
+      .catch(() => toast.error('PPT request analysis failed.'));
+  };
+
   const handleExportPptx = () => {
     if (!deckPlan || !documentEnhancement) {
       toast.error('Wait for the Slide JSON and layout engine to finish.');
@@ -77,7 +86,7 @@ export function PptMakerPage() {
       <PageHeader
         eyebrow="QLEARN Startup"
         title="PPT Deck Maker"
-        description="Choose a template or upload a sample style, then add source text or a DOCX, PDF, or PPTX file. QLEARN will create a Slide JSON plan, varied layouts, and an editable PPTX output."
+        description="Choose a template or upload a sample style, then add source text or attach PDF, DOCX, PPTX, XLSX, and image references. QLEARN will extract usable material, create a Slide JSON plan, varied layouts, and an editable PPTX output."
         actions={
           <Button
             variant="secondary"
@@ -122,7 +131,9 @@ export function PptMakerPage() {
           form={form}
           templates={pptTemplates}
           isLoading={isGenerating}
+          isAnalyzingRequest={isAnalyzingRequest}
           onChange={(patch) => dispatch(updateForm(patch))}
+          onAnalyzeRequest={handleRequestAnalysis}
           onTemplateSelect={handleTemplateSelect}
           onSubmit={handleSubmit}
         />

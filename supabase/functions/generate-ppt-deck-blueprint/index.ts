@@ -13,16 +13,31 @@ type SlideVisualStructure =
   | 'case-story'
   | 'closing-commitment';
 
+type PurposeTemplate = {
+  id: string;
+  name: string;
+  description: string;
+  documentType: string;
+  presentationIntent: string;
+  defaultOutline: string[];
+  compositionRules: string[];
+};
+
 type PlannerRequest = {
   sourceText: string;
   targetLanguage: TargetLanguage;
+  topic?: string;
   audience: string;
   purpose: string;
+  presentationDurationMinutes?: number;
+  documentType?: string;
   slideCount: number;
   contentDensity?: 'light' | 'standard' | 'detailed';
   presentationIntent?: string;
   coreMessage?: string;
   requiredSections?: string;
+  purposeTemplate?: PurposeTemplate;
+  sourceMaterialAnalysis?: { summary: string; keyPoints: string[]; dataPoints: string[]; availableVisuals: string[]; sources: unknown[] };
   creationInstructions?: string;
   presentationGuide?: { name: string; narrativeGuide: string; visualGuide: string; slideRules: string[] };
   styleReference?: { name: string; notes: string; primaryColorLabel: string; accentColorLabel: string };
@@ -38,6 +53,8 @@ type DeckStrategy = {
 type DeckSection = {
   id: string;
   title: string;
+  role: string;
+  keyQuestion: string;
   purpose: string;
   keyMessage: string;
   slideStart: number;
@@ -110,14 +127,19 @@ async function requestBlueprint(
     maximumSlidesPerSection: maxSlidesPerSection,
     minimumSectionCount: Math.ceil(request.slideCount / maxSlidesPerSection),
     targetLanguage: request.targetLanguage,
+    topic: request.topic,
     audience: request.audience,
     purpose: request.purpose,
+    presentationDurationMinutes: request.presentationDurationMinutes,
+    documentType: request.documentType,
     presentationIntent: request.presentationIntent,
     coreMessage: request.coreMessage,
     requiredSections: request.requiredSections,
+    purposeTemplate: request.purposeTemplate,
     creationInstructions: request.creationInstructions,
     presentationGuide: request.presentationGuide,
     styleReference: request.styleReference,
+    sourceMaterialAnalysis: request.sourceMaterialAnalysis,
     sourceText: request.sourceText,
     previousBlueprint,
     qaIssuesToFix: qaIssues,
@@ -125,9 +147,10 @@ async function requestBlueprint(
       'Plan the whole deck before drafting any slide. This response is the controlling blueprint for later independent section-generation calls.',
       'Return contiguous sections in presentation order. slideStart must begin at 1 and every section must start immediately after the prior section ends.',
       `The section slideCounts must sum exactly to ${request.slideCount}. No section may exceed ${maxSlidesPerSection} slides.`,
-      'Every section needs one argument role, a key message, and a visualFocus that fits its communication work. Avoid repeating a generic card grid across sections.',
-      'Use the supplied coreMessage as the unifying thesis. Map requiredSections into named sections and make the final section an action, decision, implementation, or commitment close.',
-      'Use the selected presentationGuide to set story rhythm and visual direction. Never invent metrics, customers, citations, or claims that are not grounded in the source.',
+      'Every section needs one explicit argument role, a decision-relevant keyQuestion, a key message, and a visualFocus that fits its communication work. The keyQuestion must be the question this section answers for the audience, not a generic topic label. Avoid repeating a generic card grid across sections.',
+      'Use the extracted topic, purpose, audience, presentation duration, document type, and supplied coreMessage as the controlling production conditions. Map requiredSections into named sections and make the final section an action, decision, implementation, or commitment close.',
+      'When purposeTemplate is supplied, preserve its defaultOutline in presentation order as the mandatory high-level table of contents. Apply all compositionRules to the section roles and visualFocus. Translate section labels into the requested target language, but do not omit a template stage.',
+      'Use the selected presentationGuide to set story rhythm and visual direction. Treat sourceMaterialAnalysis dataPoints as the available numeric or tabular evidence, and availableVisuals as reference material for visual emphasis. Never invent metrics, customers, citations, or claims that are not grounded in the source.',
       'For a long deck, deliberately allocate sections for context, diagnosis, model, evidence, application, implementation, governance or risk, measurement, and conclusion as appropriate to the source.',
       'Use exactly the requested language, except permitted proper names and standard business abbreviations.',
     ],
@@ -182,9 +205,9 @@ const blueprintSchema = {
     sections: {
       type: 'array', items: {
         type: 'object', additionalProperties: false,
-        required: ['id', 'title', 'purpose', 'keyMessage', 'slideStart', 'slideCount', 'visualFocus'],
+        required: ['id', 'title', 'role', 'keyQuestion', 'purpose', 'keyMessage', 'slideStart', 'slideCount', 'visualFocus'],
         properties: {
-          id: { type: 'string' }, title: { type: 'string' }, purpose: { type: 'string' }, keyMessage: { type: 'string' },
+          id: { type: 'string' }, title: { type: 'string' }, role: { type: 'string' }, keyQuestion: { type: 'string' }, purpose: { type: 'string' }, keyMessage: { type: 'string' },
           slideStart: { type: 'integer' }, slideCount: { type: 'integer' }, visualFocus: { type: 'array', items: { type: 'string', enum: structures } },
         },
       },
@@ -217,6 +240,8 @@ function parseBlueprint(output: string): DeckBlueprint {
       return {
         id: text(item.id) || `section-${index + 1}`,
         title: text(item.title),
+        role: text(item.role) || defaultSectionRole(index, sections.length),
+        keyQuestion: text(item.keyQuestion) || defaultSectionQuestion(index, sections.length),
         purpose: text(item.purpose),
         keyMessage: text(item.keyMessage),
         slideStart: positive(item.slideStart, index + 1),
@@ -226,6 +251,18 @@ function parseBlueprint(output: string): DeckBlueprint {
     }),
     qaChecks: [],
   };
+}
+
+function defaultSectionRole(index: number, sectionCount: number): string {
+  if (index === 0) return 'Context and decision framing';
+  if (index === sectionCount - 1) return 'Action and commitment';
+  return 'Evidence and recommendation building';
+}
+
+function defaultSectionQuestion(index: number, sectionCount: number): string {
+  if (index === 0) return 'What decision context and audience need should frame the presentation?';
+  if (index === sectionCount - 1) return 'What action, owner, or commitment should follow this presentation?';
+  return 'What evidence or operating logic makes the recommendation credible?';
 }
 
 function normalizeVisualFocus(value: unknown, sectionIndex: number): SlideVisualStructure[] {
@@ -278,7 +315,7 @@ function validateBlueprint(blueprint: DeckBlueprint, request: PlannerRequest): s
   if (totalSlides !== request.slideCount) issues.push(`Expected ${request.slideCount} slides across sections but received ${totalSlides}.`);
   let expectedStart = 1;
   blueprint.sections.forEach((section) => {
-    if (!section.title || !section.purpose || !section.keyMessage) issues.push(`Section ${section.id} is missing a title, purpose, or key message.`);
+    if (!section.title || !section.role || !section.keyQuestion || !section.purpose || !section.keyMessage) issues.push(`Section ${section.id} is missing a title, role, key question, purpose, or key message.`);
     if (section.slideStart !== expectedStart) issues.push(`Section ${section.id} must start at page ${expectedStart}.`);
     if (section.slideCount > 10) issues.push(`Section ${section.id} has more than ten slides.`);
     if (!section.visualFocus.length) issues.push(`Section ${section.id} needs visual direction.`);
@@ -294,13 +331,20 @@ function normalizeRequest(value: unknown): PlannerRequest | null {
   return {
     sourceText: value.sourceText.trim(),
     targetLanguage: value.targetLanguage === 'Korean' ? 'Korean' : 'English',
+    topic: text(value.topic) || undefined,
     audience: text(value.audience) || 'General audience',
     purpose: text(value.purpose) || 'Business presentation',
+    presentationDurationMinutes: typeof value.presentationDurationMinutes === 'number' && Number.isFinite(value.presentationDurationMinutes)
+      ? Math.min(480, Math.max(1, Math.round(value.presentationDurationMinutes)))
+      : undefined,
+    documentType: text(value.documentType) || undefined,
     slideCount: typeof value.slideCount === 'number' && Number.isFinite(value.slideCount) ? Math.min(100, Math.max(2, Math.round(value.slideCount))) : 6,
     contentDensity: value.contentDensity === 'standard' || value.contentDensity === 'detailed' ? value.contentDensity : 'light',
     presentationIntent: text(value.presentationIntent) || undefined,
     coreMessage: text(value.coreMessage) || undefined,
     requiredSections: text(value.requiredSections) || undefined,
+    purposeTemplate: parsePurposeTemplate(value.purposeTemplate),
+    sourceMaterialAnalysis: normalizeSourceMaterialAnalysis(value.sourceMaterialAnalysis),
     creationInstructions: text(value.creationInstructions) || undefined,
     presentationGuide: guide ? {
       name: text(guide.name) || 'General presentation guide', narrativeGuide: text(guide.narrativeGuide), visualGuide: text(guide.visualGuide),
@@ -311,6 +355,31 @@ function normalizeRequest(value: unknown): PlannerRequest | null {
       primaryColorLabel: text(styleReference.primaryColorLabel) || 'navy', accentColorLabel: text(styleReference.accentColorLabel) || 'orange',
     },
   };
+}
+
+function parsePurposeTemplate(value: unknown): PurposeTemplate | undefined {
+  if (!isRecord(value)) return undefined;
+  const id = text(value.id);
+  const name = text(value.name);
+  const documentType = text(value.documentType);
+  const presentationIntent = text(value.presentationIntent);
+  if (!id || !name || !documentType || !presentationIntent) return undefined;
+  return {
+    id,
+    name,
+    description: text(value.description),
+    documentType,
+    presentationIntent,
+    defaultOutline: Array.isArray(value.defaultOutline) ? value.defaultOutline.map(text).filter(Boolean).slice(0, 12) : [],
+    compositionRules: Array.isArray(value.compositionRules) ? value.compositionRules.map(text).filter(Boolean).slice(0, 8) : [],
+  };
+}
+
+function normalizeSourceMaterialAnalysis(value: unknown): PlannerRequest['sourceMaterialAnalysis'] | undefined {
+  if (!isRecord(value)) return undefined;
+  const values = (input: unknown) => Array.isArray(input) ? input.map(text).filter(Boolean).slice(0, 6) : [];
+  const summary = text(value.summary);
+  return summary ? { summary, keyPoints: values(value.keyPoints), dataPoints: values(value.dataPoints), availableVisuals: values(value.availableVisuals), sources: Array.isArray(value.sources) ? value.sources.slice(0, 20) : [] } : undefined;
 }
 
 function parseOpenAiResponse(rawPayload: string, status: number): Record<string, unknown> & { error?: { message?: string } } {

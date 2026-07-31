@@ -5,16 +5,31 @@ import type {
   PptEditableSlideLayout,
   PptEditableTextBlock,
   SlidePlan,
+  SourceReference,
 } from '@/types/models/pptMaker.model';
+import { getPptDesignQualityIssues, getPptDesignTokens, type PptDesignTokens } from '@/utils/pptDesignQuality';
+import { PPT_EXPORT_GRID, snapEditableLayoutToGrid } from '@/utils/pptGrid';
+import { fitEditableTextBlocks, getEditableTextLayoutIssues } from '@/utils/pptTextLayout';
 
-const SLIDE_W = 13.333;
-const SLIDE_H = 7.5;
+const SLIDE_W = PPT_EXPORT_GRID.width;
+const SLIDE_H = PPT_EXPORT_GRID.height;
 
 export async function enhancePptDocument(
   deckPlan: PptDeckPlan,
 ): Promise<PptDocumentEnhancement> {
   const hasLogo = Boolean(deckPlan.request.logoImageDataUrl);
-  const layouts = deckPlan.slides.map((slide) => createBrowserPptxLayout(slide, hasLogo));
+  const tokens = getPptDesignTokens(deckPlan.request.styleReference.templateDesign);
+  const layouts = deckPlan.slides.map((slide) => {
+    const snappedLayout = snapEditableLayoutToGrid(
+      createBrowserPptxLayout(slide, hasLogo, tokens, deckPlan.request.sourceMaterialAnalysis?.sources ?? []),
+    );
+    return { ...snappedLayout, textBlocks: fitEditableTextBlocks(snappedLayout.textBlocks) };
+  });
+  const textLayoutIssues = layouts.flatMap((layout) =>
+    getEditableTextLayoutIssues(layout.textBlocks).map((issue) => `Slide ${layout.pageNumber}: ${issue}`),
+  );
+  const designQualityIssues = getPptDesignQualityIssues(deckPlan, layouts);
+  const fallbackPreflightIssues = [...textLayoutIssues, ...designQualityIssues];
 
   return {
     title: deckPlan.title,
@@ -28,52 +43,57 @@ export async function enhancePptDocument(
       'Slide copy was approved before layout rendering.',
       'The layout engine selected a visual structure for every approved Slide JSON record.',
       'HTML/CSS is the preview source and dom-to-pptx converts the same text, cards, connectors, and diagrams into editable PowerPoint objects.',
-      'PptxGenJS remains available for post-processing and browser fallback export.',
+      'PptxGenJS remains available only for post-processing or explicit fallback export; it is not used as the quality source for the HTML/CSS design.',
       'The final PPTX is saved with a short Supabase Storage request after browser-side assembly finishes.',
+      fallbackPreflightIssues.length === 0
+        ? 'The secondary PptxGenJS fallback layout passed its independent fit and design preflight.'
+        : `The secondary PptxGenJS fallback layout has ${fallbackPreflightIssues.length} preflight finding(s); final browser DOM export remains the approved visual source.`,
+      'Every editable text block, shape, logo region, and visual layer was snapped to the shared 12-column grid before export.',
     ],
     layouts,
     layoutSource: 'html-css',
   };
 }
 
-function createBrowserPptxLayout(slide: SlidePlan, hasLogo: boolean): PptEditableSlideLayout {
+function createBrowserPptxLayout(slide: SlidePlan, hasLogo: boolean, tokens: PptDesignTokens, sources: SourceReference[]): PptEditableSlideLayout {
   const imageLayer = getImageLayer(slide);
   const contentBlocks = getContentBlocks(slide);
   const objective = slide.objective || slide.subtitle;
   const decision = slide.decision || slide.takeaway;
+  const sourceLabel = getSourceLabel(slide, sources);
   const labelBoxes = getLabelBoxes(slide, contentBlocks.length);
-  const messageBox = getMessageBox(slide);
+  const messageBox = getMessageBox(slide, contentBlocks.length);
   const shapes: PptEditableShape[] = [
     {
       id: 'title-accent',
       type: 'rect',
-      x: 0.52,
-      y: 0.52,
+      x: PPT_EXPORT_GRID.safeMarginX,
+      y: 0.42,
       w: 0.06,
-      h: 1.2,
-      fillColor: 'FE6621',
-      lineColor: 'FE6621',
+      h: 1.18,
+      fillColor: tokens.accent,
+      lineColor: tokens.accent,
       transparency: 0,
     },
     {
       id: 'footer-line',
       type: 'line',
-      x: 0.52,
-      y: 6.52,
+      x: PPT_EXPORT_GRID.safeMarginX,
+      y: PPT_EXPORT_GRID.footerLineY,
       w: 12.25,
       h: 0,
-      lineColor: 'D8E1EF',
+      lineColor: tokens.border,
       lineWidth: 1,
     },
     {
       id: 'page-circle',
       type: 'ellipse',
-      x: 12.15,
-      y: 6.57,
+      x: PPT_EXPORT_GRID.pageX,
+      y: PPT_EXPORT_GRID.pageY,
       w: 0.5,
       h: 0.5,
-      fillColor: '0B2454',
-      lineColor: '0B2454',
+      fillColor: tokens.primary,
+      lineColor: tokens.primary,
     },
     ...labelBoxes.map((box, index) => ({
       id: `label-panel-${index + 1}`,
@@ -82,8 +102,8 @@ function createBrowserPptxLayout(slide: SlidePlan, hasLogo: boolean): PptEditabl
       y: box.y,
       w: box.w,
       h: box.h,
-      fillColor: index % 2 === 0 ? 'F3F6FB' : 'FFF7EE',
-      lineColor: 'D8E1EF',
+      fillColor: index % 2 === 0 ? tokens.primarySurface : tokens.accentSurface,
+      lineColor: tokens.border,
       lineWidth: 0.8,
     })),
   ];
@@ -96,8 +116,8 @@ function createBrowserPptxLayout(slide: SlidePlan, hasLogo: boolean): PptEditabl
       y: messageBox.y - 0.14,
       w: messageBox.w + 0.24,
       h: messageBox.h + 0.28,
-      fillColor: '0B2454',
-      lineColor: '0B2454',
+      fillColor: tokens.primary,
+      lineColor: tokens.primary,
     });
   }
 
@@ -106,9 +126,9 @@ function createBrowserPptxLayout(slide: SlidePlan, hasLogo: boolean): PptEditabl
     visualStrategy: 'rebuild-with-editables',
     imageLayer,
     shapes,
-    textBlocks: [
-      { id: 'title', role: 'title', text: slide.title, x: 0.76, y: 0.5, w: 8.8, h: 0.48, fontSize: 25, bold: true, color: '0B2454' },
-      { id: 'subtitle', role: 'subtitle', text: slide.subtitle, x: 0.76, y: 1.03, w: 8.8, h: 0.32, fontSize: 11.5, color: '5F6F89' },
+    textBlocks: fitEditableTextBlocks([
+      { id: 'title', role: 'title', text: slide.title, x: PPT_EXPORT_GRID.headerX, y: 0.42, w: 9.7, h: 0.84, fontSize: 25, bold: true, color: tokens.primary },
+      { id: 'subtitle', role: 'subtitle', text: slide.subtitle, x: PPT_EXPORT_GRID.headerX, y: 1.3, w: 9.7, h: 0.3, fontSize: 11.5, color: tokens.muted },
       {
         id: 'main-message',
         role: 'main-message',
@@ -116,7 +136,7 @@ function createBrowserPptxLayout(slide: SlidePlan, hasLogo: boolean): PptEditabl
         ...messageBox,
         fontSize: slide.visualStructure === 'message-emphasis' ? 19 : 14,
         bold: slide.visualStructure === 'message-emphasis',
-        color: slide.visualStructure === 'message-emphasis' ? 'FFFFFF' : '18253D',
+        color: slide.visualStructure === 'message-emphasis' ? tokens.white : tokens.primary,
         align: slide.visualStructure === 'message-emphasis' ? 'center' : 'left',
       },
     ...contentBlocks.map((block, index) => ({
@@ -125,23 +145,33 @@ function createBrowserPptxLayout(slide: SlidePlan, hasLogo: boolean): PptEditabl
         text: `${block.heading}\n${block.detail}`,
         ...labelBoxes[index],
         x: labelBoxes[index]?.x + 0.08,
-        y: labelBoxes[index]?.y + Math.max(0.12, labelBoxes[index]?.h * 0.3),
+        y: labelBoxes[index]?.y + 0.08,
         w: Math.max(0.3, (labelBoxes[index]?.w ?? 0.5) - 0.16),
-        h: Math.max(0.18, (labelBoxes[index]?.h ?? 0.5) * 0.44),
-        fontSize: 8.5,
+        h: Math.max(0.3, (labelBoxes[index]?.h ?? 0.5) - 0.16),
+        fontSize: 8,
         bold: true,
-        color: '0B2454',
+        color: tokens.primary,
         align: 'center' as const,
       })),
-      { id: 'objective', role: 'subtitle', text: objective, x: 0.76, y: 1.35, w: 8.8, h: 0.26, fontSize: 9.5, bold: true, color: '0B2454' },
-      { id: 'takeaway', role: 'takeaway', text: slide.takeaway, x: 0.76, y: 6.56, w: 10.95, h: 0.16, fontSize: 7.8, color: '5F6F89' },
-      { id: 'decision', role: 'takeaway', text: decision, x: 0.76, y: 6.8, w: 10.95, h: 0.18, fontSize: 8.5, bold: true, color: '0B2454' },
-      { id: 'page-number', role: 'footer', text: String(slide.pageNumber).padStart(2, '0'), x: 12.15, y: 6.69, w: 0.5, h: 0.16, fontSize: 9.5, bold: true, color: 'FFFFFF', align: 'center' },
-      { id: 'logo', role: 'logo', text: hasLogo ? '' : '\uB85C\uACE0', x: 11.45, y: 0.42, w: 1.14, h: 0.42, fontSize: 8.5, color: '85878A', align: 'center' },
+      { id: 'objective', role: 'subtitle', text: objective, x: PPT_EXPORT_GRID.headerX, y: 1.64, w: 9.7, h: 0.36, fontSize: 9.5, bold: true, color: tokens.primary },
+      ...(sourceLabel ? [{ id: 'source', role: 'footer' as const, text: sourceLabel, x: PPT_EXPORT_GRID.headerX, y: 6.28, w: 10.95, h: 0.16, fontSize: 7, color: tokens.muted }] : []),
+      { id: 'takeaway', role: 'takeaway', text: slide.takeaway, x: PPT_EXPORT_GRID.headerX, y: PPT_EXPORT_GRID.footerLineY, w: 10.96, h: 0.24, fontSize: 7.8, color: tokens.muted },
+      { id: 'decision', role: 'takeaway', text: decision, x: PPT_EXPORT_GRID.headerX, y: 6.8, w: 10.96, h: 0.24, fontSize: 8.5, bold: true, color: tokens.primary },
+      { id: 'page-number', role: 'footer', text: String(slide.pageNumber).padStart(2, '0'), x: PPT_EXPORT_GRID.pageX, y: 6.68, w: 0.5, h: 0.16, fontSize: 9.5, bold: true, color: tokens.white, align: 'center' },
+      { id: 'logo', role: 'logo', text: hasLogo ? '' : '\uB85C\uACE0', x: 11.45, y: 0.42, w: 1.14, h: 0.42, fontSize: 8.5, color: tokens.muted, align: 'center' },
+    ]),
+    qaChecks: [
+      `Editable layout is derived from the approved ${slide.visualStructure} slide structure.`,
+      'Editable text was fitted to its PowerPoint bounds without dropping below the 7pt readability threshold.',
     ],
-    qaChecks: [`Editable layout is derived from the approved ${slide.visualStructure} slide structure.`],
     placementConfidence: 100,
   };
+}
+
+function getSourceLabel(slide: SlidePlan, sources: SourceReference[]): string | null {
+  const source = sources.find((item) => slide.sourceIds?.includes(item.id));
+  if (!source) return null;
+  return `Source: ${source.sourceName} - ${source.documentName}${source.publicationYear ? ` (${source.publicationYear})` : ''}`;
 }
 
 function getImageLayer(slide: SlidePlan): PptEditableSlideLayout['imageLayer'] {
@@ -149,24 +179,38 @@ function getImageLayer(slide: SlidePlan): PptEditableSlideLayout['imageLayer'] {
   return { strategy: 'none', x: 0, y: 0, w: 0, h: 0 };
 }
 
-function getMessageBox(slide: SlidePlan): Pick<PptEditableTextBlock, 'x' | 'y' | 'w' | 'h'> {
+function getMessageBox(slide: SlidePlan, blockCount: number): Pick<PptEditableTextBlock, 'x' | 'y' | 'w' | 'h'> {
   switch (slide.visualStructure) {
     case 'message-emphasis':
       return { x: 1.05, y: 2.55, w: 5.95, h: 0.72 };
     case 'side-by-side-comparison':
     case 'before-after-mapping':
-      return { x: 0.9, y: 5.05, w: 5.9, h: 0.58 };
+      return blockCount > 4
+        ? { x: 0.9, y: 5.35, w: 5.9, h: 0.48 }
+        : { x: 0.9, y: 5.05, w: 5.9, h: 0.58 };
     case 'numbered-process':
     case 'roadmap':
-      return { x: 0.9, y: 4.4, w: 5.9, h: 0.64 };
+      return blockCount > 3
+        ? { x: 0.9, y: 5.0, w: 5.9, h: 0.5 }
+        : { x: 0.9, y: 4.4, w: 5.9, h: 0.64 };
     case 'hub-and-spoke':
-      return { x: 0.9, y: 4.72, w: 5.9, h: 0.64 };
+      return blockCount > 4
+        ? { x: 0.9, y: 5.35, w: 5.9, h: 0.48 }
+        : { x: 0.9, y: 4.72, w: 5.9, h: 0.64 };
     case 'metrics-dashboard':
       return { x: 0.9, y: 4.05, w: 5.9, h: 0.64 };
     case 'pyramid-framework':
-      return { x: 0.9, y: 5.18, w: 5.9, h: 0.58 };
+      return blockCount > 4
+        ? { x: 0.9, y: 5.35, w: 5.9, h: 0.48 }
+        : { x: 0.9, y: 5.18, w: 5.9, h: 0.58 };
+    case 'hero-visual':
+      return blockCount > 3
+        ? { x: 0.9, y: 5.35, w: 5.9, h: 0.48 }
+        : { x: 0.9, y: 4.65, w: 5.9, h: 0.64 };
     default:
-      return { x: 0.9, y: 4.65, w: 5.9, h: 0.64 };
+      return blockCount > 4
+        ? { x: 0.9, y: 5.35, w: 5.9, h: 0.48 }
+        : { x: 0.9, y: 4.65, w: 5.9, h: 0.64 };
   }
 }
 
@@ -181,27 +225,37 @@ function getLabelBoxes(slide: SlidePlan, blockCount: number): Array<Pick<PptEdit
   const linearBoxes = (y: number, availableWidth = 5.9, h = 0.66) => {
     const gap = 0.12;
     const width = (availableWidth - gap * (count - 1)) / count;
-    return Array.from({ length: count }, (_, index) => ({ x: 0.86 + index * (width + gap), y, w: width, h }));
+    return Array.from({ length: count }, (_, index) => ({ x: PPT_EXPORT_GRID.bodyX + index * (width + gap), y, w: width, h }));
+  };
+  const gridBoxes = (y: number, columns = 3, h = 0.84) => {
+    const gap = 0.12;
+    const width = (5.9 - gap * (columns - 1)) / columns;
+    return Array.from({ length: count }, (_, index) => ({
+      x: PPT_EXPORT_GRID.bodyX + (index % columns) * (width + gap),
+      y: y + Math.floor(index / columns) * (h + gap),
+      w: width,
+      h,
+    }));
   };
 
   if (slide.visualStructure === 'numbered-process' || slide.visualStructure === 'roadmap') {
-    return linearBoxes(2.95, 5.9, 0.74);
+    return count > 3 ? gridBoxes(2.95, 3, 0.9) : linearBoxes(2.95, 5.9, 0.9);
   }
   if (slide.visualStructure === 'metrics-dashboard') {
     return linearBoxes(2.2, 5.9, 1.32);
   }
   if (slide.visualStructure === 'hero-visual') {
-    return linearBoxes(3.5, 5.9, 0.62);
+    return count > 3 ? gridBoxes(3.5, 3, 0.84) : linearBoxes(3.5, 5.9, 0.84);
   }
   if (slide.visualStructure === 'message-emphasis') {
-    return linearBoxes(4.25, 5.9, 0.58);
+    return count > 3 ? gridBoxes(4.25, 3, 0.84) : linearBoxes(4.25, 5.9, 0.84);
   }
 
   return Array.from({ length: count }, (_, index) => ({
-    x: 0.86 + (index % 2) * 3.0,
+    x: PPT_EXPORT_GRID.bodyX + (index % 2) * 3.0,
     y: 2.15 + Math.floor(index / 2) * 1.08,
     w: 2.55,
-    h: 0.83,
+    h: 0.98,
   }));
 }
 

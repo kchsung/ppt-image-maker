@@ -31,7 +31,7 @@ function validStrategy() {
 function validSlide(overrides: Record<string, unknown> = {}) {
   const pageNumber = typeof overrides.pageNumber === 'number' ? overrides.pageNumber : 1;
   return {
-    pageNumber, archetype: 'cover', visualStructure: 'hero-visual', title: `Build Trust With Evidence ${pageNumber}`,
+    pageNumber, archetype: 'cover', slideRole: 'opening', visualStructure: 'hero-visual', title: `Build Trust With Evidence ${pageNumber}`,
     subtitle: 'A practical workflow for accountable AI decisions.',
     objective: 'Show the decision framework the audience should adopt.',
     mainMessage: `Teams move faster when generated work is linked to evidence and reviewed by accountable people at stage ${pageNumber}.`,
@@ -42,6 +42,12 @@ function validSlide(overrides: Record<string, unknown> = {}) {
       { heading: 'Approve action', detail: 'Assign a named owner who confirms the final recommendation and next action.' },
     ],
     decision: 'Standardize one evidence-backed review workflow this quarter.',
+    dependency: {
+      previousSlideNumber: pageNumber === 1 ? null : pageNumber - 1,
+      questionAddressed: 'What decision framework should the team adopt?',
+      answerSummary: 'This slide resolves the question with an evidence-backed workflow.',
+      nextQuestion: null,
+    },
     ...overrides,
   };
 }
@@ -66,9 +72,117 @@ describe('generate-ppt-slide-plan Edge Function', () => {
     expect(result.status).toBe(200);
     expect(body.strategy.coreThesis).toContain('Evidence-backed decisions');
     expect(body.slides[0].contentBlocks).toHaveLength(3);
+    expect(body.slides[0].slideRole).toBe('opening');
     expect(body.slides[0].decision).toContain('Standardize');
+    expect(body.slides[0].dependency).toMatchObject({
+      previousSlideNumber: null,
+      questionAddressed: 'What decision framework should the team adopt?',
+      nextQuestion: null,
+    });
     expect(body.slides[0].imagePrompt).toBe('');
     expect(body.copyQa.status).toBe('passed');
+  });
+
+  it('converts a topic-only slide title into a conclusion headline before returning the plan', async () => {
+    fetchMock.mockResolvedValue(response([validSlide({
+      title: 'AI Platform',
+      mainMessage: 'Evidence improves decisions.',
+    })]));
+
+    const result = await handler!(new Request('http://localhost', { method: 'POST', body: JSON.stringify(requestBody) }));
+    const body = await result.json();
+
+    expect(result.status).toBe(200);
+    expect(body.slides[0].title).toBe('Evidence improves decisions');
+  });
+
+  it('compacts long body copy and keeps proof-point headings aligned with labels', async () => {
+    fetchMock.mockResolvedValue(response([validSlide({
+      subtitle: 'A deliberately long subtitle that should be compacted before it reaches the editable PowerPoint layout and preview.',
+      mainMessage: 'Evidence-backed workflow design gives teams a reliable way to turn fragmented source material into accountable decisions. The same workflow keeps ownership visible as adoption scales.',
+      contentBlocks: [
+        {
+          heading: 'Traceable evidence and accountable ownership',
+          detail: 'Teams connect each claim to a traceable source, named owner, decision rule, review checkpoint, and measurable next action before the work is approved.',
+        },
+        { heading: 'Verify evidence', detail: 'Link material claims to sources and make uncertain assumptions visible to reviewers.' },
+        { heading: 'Approve action', detail: 'Assign a named owner who confirms the final recommendation and next action.' },
+      ],
+    })]));
+
+    const result = await handler!(new Request('http://localhost', { method: 'POST', body: JSON.stringify(requestBody) }));
+    const body = await result.json();
+
+    expect(result.status).toBe(200);
+    expect(body.slides[0].subtitle.length).toBeLessThanOrEqual(76);
+    expect(body.slides[0].contentBlocks[0].heading.length).toBeLessThanOrEqual(30);
+    expect(body.slides[0].contentBlocks[0].detail.length).toBeLessThanOrEqual(116);
+    expect(body.slides[0].labels).toEqual(body.slides[0].contentBlocks.map((block: { heading: string }) => block.heading));
+  });
+
+  it('compacts structured visual copy before returning table, chart, and metric metadata', async () => {
+    fetchMock.mockResolvedValue(response([validSlide({
+      comparisonTable: {
+        rationale: 'This comparison rationale is deliberately long so the response must compact it before a small editable table caption is rendered.',
+        columnHeaders: ['Criterion and operating decision', 'Current state with fragmented ownership', 'Target state with accountable ownership'],
+        rows: [{ criterion: 'Review timing and accountable owner', values: ['Ten business days with unclear sign-off and recurring rework.', 'Two business days with named ownership and explicit approval rules.'], emphasis: 'difference' }],
+        highlightedRowIndex: 0,
+        keyResult: 'Named ownership turns recurring review delay into a predictable operating decision that teams can measure.',
+      },
+      chart: {
+        purpose: 'comparison', type: 'bar', rationale: 'This chart rationale should be compacted for an editable chart caption.',
+        series: [{ label: 'Adoption across enterprise operating groups', value: 72 }], targetValue: null, highlightedIndex: 0, unit: '%',
+        keyResult: 'The governed rollout produces the strongest adoption result in the source evidence.',
+      },
+      keyMetric: {
+        label: 'Enterprise adoption across governed business groups', displayValue: '72% adoption of the governed workflow', numericValue: 72,
+        changeText: '+18% after the evidence-backed rollout', direction: 'up',
+        comparisonText: 'Adoption improved after teams received a traceable workflow, named reviewers, and a measurable operating cadence.',
+        rationale: 'The value is the most decision-relevant metric available in the source evidence.',
+      },
+    })]));
+
+    const result = await handler!(new Request('http://localhost', { method: 'POST', body: JSON.stringify(requestBody) }));
+    const body = await result.json();
+    const returnedSlide = body.slides[0];
+
+    expect(result.status).toBe(200);
+    expect(returnedSlide.comparisonTable.columnHeaders.every((header: string) => header.length <= 30)).toBe(true);
+    expect(returnedSlide.comparisonTable.rows[0].values.every((value: string) => value.length <= 116)).toBe(true);
+    expect(returnedSlide.chart.series[0].label.length).toBeLessThanOrEqual(30);
+    expect(returnedSlide.keyMetric.label.length).toBeLessThanOrEqual(30);
+    expect(returnedSlide.keyMetric.comparisonText.length).toBeLessThanOrEqual(116);
+    expect(JSON.stringify(returnedSlide)).not.toMatch(/(?:\.{2,}|…)/u);
+  });
+
+  it('returns non-blocking redundancy recommendations for semantically overlapping slide drafts', async () => {
+    fetchMock.mockResolvedValue(response([
+      validSlide({
+        pageNumber: 1,
+        title: 'Evidence Builds Trust',
+        mainMessage: 'Teams use source-backed workflows to make accountable decisions.',
+      }),
+      validSlide({
+        pageNumber: 2,
+        title: 'Evidence Strengthens Trust',
+        mainMessage: 'Teams use source-backed reviews to make accountable decisions.',
+      }),
+    ]));
+
+    const result = await handler!(new Request('http://localhost', {
+      method: 'POST',
+      body: JSON.stringify({ request: { ...requestBody.request, slideCount: 2 } }),
+    }));
+    const body = await result.json();
+
+    expect(result.status).toBe(200);
+    expect(body.copyQa.redundancySuggestions).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        slideNumbers: [1, 2],
+        action: 'merge',
+        kind: 'title',
+      }),
+    ]));
   });
 
   it('normalizes an older or partially completed form request instead of rejecting it', async () => {
@@ -113,6 +227,10 @@ describe('generate-ppt-slide-plan Edge Function', () => {
           visualGuide: 'Quiet executive composition with a decision-oriented footer.',
           slideRules: ['Lead with the business decision, not product features.'],
         },
+        purposeTemplate: {
+          id: 'business-proposal', name: 'Business Proposal', description: 'Decision proposal.', documentType: 'proposal', presentationIntent: 'executive-proposal',
+          defaultOutline: ['Business context', 'Proposal value', 'Decision request'], compositionRules: ['Open with the business decision.'],
+        },
       },
     };
     fetchMock.mockResolvedValue(response([validSlide()]));
@@ -125,6 +243,7 @@ describe('generate-ppt-slide-plan Edge Function', () => {
     expect(planningPrompt.coreMessage).toBe('Convert verified enterprise knowledge into accountable AI assets.');
     expect(planningPrompt.requiredSections).toContain('knowledge operating model');
     expect(planningPrompt.presentationGuide).toMatchObject({ name: 'B2B Executive Proposal' });
+    expect(planningPrompt.purposeTemplate).toMatchObject({ id: 'business-proposal' });
     expect(planningPrompt.rules).toContain(
       'Treat presentationGuide as the default creative direction: follow its narrativeGuide for the argument, its visualGuide for visual pacing, and its slideRules as non-negotiable planning rules. Use requiredSections to form named stages in the narrative arc; do not omit a required section unless it conflicts with the source or target language.',
     );
@@ -154,12 +273,33 @@ describe('generate-ppt-slide-plan Edge Function', () => {
     const body = await result.json();
 
     expect(result.status).toBe(200);
-    expect(body.slides.map((slide: { visualStructure: string }) => slide.visualStructure)).toEqual([
-      'hero-visual',
-      'message-emphasis',
-      'card-grid',
-      'closing-commitment',
-    ]);
+    const structures = body.slides.map((slide: { visualStructure: string }) => slide.visualStructure);
+    const familyByStructure: Record<string, string> = {
+      'hero-visual': 'hero',
+      'message-emphasis': 'message',
+      'card-grid': 'card',
+      'side-by-side-comparison': 'comparison',
+      'numbered-process': 'process',
+      'before-after-mapping': 'comparison',
+      'hub-and-spoke': 'structure',
+      'metrics-dashboard': 'data',
+      roadmap: 'timeline',
+      'pyramid-framework': 'structure',
+      'case-story': 'case',
+      'closing-commitment': 'closing',
+    };
+    expect(structures[0]).toBe('hero-visual');
+    expect(structures.at(-1)).toBe('closing-commitment');
+    expect(new Set(structures)).toHaveLength(4);
+    structures.slice(1).forEach((structure: string, index: number) => {
+      expect(familyByStructure[structure]).not.toBe(familyByStructure[structures[index]]);
+    });
+    expect(body.slides[0].slideRole).toBe('opening');
+    expect(body.slides.at(-1).slideRole).toBe('conclusion');
+    expect(body.slides[1].slideRole).toBe('problem-framing');
+    expect(body.slides[2].slideRole).toBe('solution');
+    expect(body.slides[0].dependency.nextQuestion).toBe(body.slides[1].dependency.questionAddressed);
+    expect(body.slides.at(-1)?.dependency.nextQuestion).toBeNull();
   });
 
   it('requests missing slide drafts when the model returns fewer slides than requested', async () => {
@@ -212,8 +352,8 @@ describe('generate-ppt-slide-plan Edge Function', () => {
           title: 'Long-form executive deck',
           strategy: validStrategy(),
           sections: [
-            { id: 'context', title: 'Context', purpose: 'Frame the decision.', keyMessage: 'The current operating model creates avoidable risk.', slideStart: 1, slideCount: 10, visualFocus: ['hero-visual', 'before-after-mapping'] },
-            { id: 'model', title: 'Operating model', purpose: 'Explain the model.', keyMessage: 'A governed workflow makes knowledge usable.', slideStart: 11, slideCount: 10, visualFocus: ['hub-and-spoke', 'roadmap'] },
+            { id: 'context', title: 'Context', role: 'Decision framing', keyQuestion: 'What operating risk requires a decision?', purpose: 'Frame the decision.', keyMessage: 'The current operating model creates avoidable risk.', slideStart: 1, slideCount: 10, visualFocus: ['hero-visual', 'before-after-mapping'] },
+            { id: 'model', title: 'Operating model', role: 'Model explanation', keyQuestion: 'How does the operating model make knowledge usable?', purpose: 'Explain the model.', keyMessage: 'A governed workflow makes knowledge usable.', slideStart: 11, slideCount: 10, visualFocus: ['hub-and-spoke', 'roadmap'] },
           ],
         },
         planningBatch: { sectionId: 'model', startPage: 11, slideCount: 5, totalSlides: 50, previousSlides: [
@@ -233,7 +373,12 @@ describe('generate-ppt-slide-plan Edge Function', () => {
     expect(body.slides.map((slide: { pageNumber: number }) => slide.pageNumber)).toEqual([11, 12, 13, 14, 15]);
     expect(prompt.requestedSlideCount).toBe(5);
     expect(prompt.totalDeckSlideCount).toBe(50);
-    expect(prompt.activeSection).toMatchObject({ id: 'model', slideStart: 11 });
+    expect(prompt.activeSection).toMatchObject({
+      id: 'model',
+      slideStart: 11,
+      role: 'Model explanation',
+      keyQuestion: 'How does the operating model make knowledge usable?',
+    });
   });
 
   it('uses the Blueprint deck strategy when validating an isolated section', async () => {
@@ -348,21 +493,45 @@ describe('generate-ppt-slide-plan Edge Function', () => {
     expect(body.slides.map((slide: { title: string }) => slide.title)).toEqual(['Evidence Creates Trust', 'Approve The First Workflow']);
   });
 
-  it('requires richer proof points when detailed content is selected', async () => {
+  it('returns a non-blocking coverage recommendation when a problem has no solution, KPI, or expected impact', async () => {
+    fetchMock.mockResolvedValue(response([validSlide({
+      slideRole: 'problem-framing',
+      title: 'Unverified Outputs Create A Decision Risk',
+      mainMessage: 'The current workflow leaves teams with unverified output and unclear accountability.',
+      decision: 'Acknowledge the risk before expanding AI use.',
+    })]));
+
+    const result = await handler!(new Request('http://localhost', { method: 'POST', body: JSON.stringify(requestBody) }));
+    const body = await result.json();
+
+    expect(result.status).toBe(200);
+    expect(body.copyQa.coverageSuggestions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'solution', severity: 'required' }),
+      expect.objectContaining({ kind: 'kpi', recommendedVisualStructure: 'metrics-dashboard' }),
+      expect.objectContaining({ kind: 'impact', severity: 'required' }),
+    ]));
+  });
+
+  it('compacts detailed proof points to the editable layout limit without dropping the proof-point structure', async () => {
     const detailedRequest = { request: { ...requestBody.request, contentDensity: 'detailed' } };
-    const detailedBlocks = [
+    const oversizedDetailedBlocks = [
       { heading: 'Set intent', detail: 'State the decision, audience, risk boundary, and expected business outcome before anyone begins drafting the response.' },
       { heading: 'Verify evidence', detail: 'Link material claims to identifiable source material, flag uncertainty, and record the assumptions reviewers must inspect before approval.' },
       { heading: 'Review trade-offs', detail: 'Compare feasible options using explicit benefits, limitations, dependencies, and operating risks instead of a generic preference statement.' },
       { heading: 'Assign ownership', detail: 'Name the accountable owner, review cadence, escalation route, and decision checkpoint required to move the work forward safely.' },
       { heading: 'Measure adoption', detail: 'Track source coverage, review completion, decision speed, and outcome quality using only measures supported by the supplied material.' },
     ];
-    fetchMock.mockResolvedValue(response([validSlide({ labels: detailedBlocks.map((block) => block.heading), contentBlocks: detailedBlocks })]));
+    fetchMock.mockResolvedValueOnce(response([
+      validSlide({ labels: oversizedDetailedBlocks.map((block) => block.heading), contentBlocks: oversizedDetailedBlocks }),
+    ]));
 
     const result = await handler!(new Request('http://localhost', { method: 'POST', body: JSON.stringify(detailedRequest) }));
     const body = await result.json();
 
     expect(result.status).toBe(200);
     expect(body.slides[0].contentBlocks).toHaveLength(5);
+    expect(body.slides[0].contentBlocks.every((block: { detail: string }) => block.detail.length <= 62)).toBe(true);
+    expect(body.slides[0].labels).toEqual(body.slides[0].contentBlocks.map((block: { heading: string }) => block.heading));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

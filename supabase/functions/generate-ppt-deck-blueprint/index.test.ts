@@ -34,8 +34,8 @@ function validBlueprint() {
     title: 'Turn Company Knowledge Into Accountable AI Workflows',
     strategy: strategy(),
     sections: [
-      { id: 'context-model', title: 'Why Knowledge Must Become Governed', purpose: 'Build the case for change.', keyMessage: 'AI value depends on trusted and usable knowledge.', slideStart: 1, slideCount: 10, visualFocus: ['hero-visual', 'before-after-mapping', 'hub-and-spoke'] },
-      { id: 'implementation', title: 'How To Launch And Scale', purpose: 'Move from model to decision.', keyMessage: 'A focused pilot creates evidence for safe scale.', slideStart: 11, slideCount: 10, visualFocus: ['roadmap', 'metrics-dashboard', 'closing-commitment'] },
+      { id: 'context-model', title: 'Why Knowledge Must Become Governed', role: 'Decision framing', keyQuestion: 'Why must leaders establish a governed knowledge foundation now?', purpose: 'Build the case for change.', keyMessage: 'AI value depends on trusted and usable knowledge.', slideStart: 1, slideCount: 10, visualFocus: ['hero-visual', 'before-after-mapping', 'hub-and-spoke'] },
+      { id: 'implementation', title: 'How To Launch And Scale', role: 'Implementation commitment', keyQuestion: 'What focused action turns the model into safe scale?', purpose: 'Move from model to decision.', keyMessage: 'A focused pilot creates evidence for safe scale.', slideStart: 11, slideCount: 10, visualFocus: ['roadmap', 'metrics-dashboard', 'closing-commitment'] },
     ],
   };
 }
@@ -72,6 +72,7 @@ describe('generate-ppt-deck-blueprint Edge Function', () => {
     expect(body.sections).toHaveLength(2);
     expect(body.sections.map((section: { slideStart: number }) => section.slideStart)).toEqual([1, 11]);
     expect(body.sections.map((section: { slideCount: number }) => section.slideCount)).toEqual([10, 10]);
+    expect(body.sections[0]).toMatchObject({ role: 'Decision framing', keyQuestion: 'Why must leaders establish a governed knowledge foundation now?' });
     expect(prompt.maximumSlidesPerSection).toBe(10);
     expect(prompt.minimumSectionCount).toBe(2);
     expect(body.qaChecks[0]).toContain('2 coherent sections');
@@ -99,5 +100,21 @@ describe('generate-ppt-deck-blueprint Edge Function', () => {
     expect(result.status).toBe(200);
     expect(body.sections[0].visualFocus).toEqual(['hero-visual', 'message-emphasis', 'card-grid']);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('sends the purpose template outline and composition rules to the whole-deck planner', async () => {
+    fetchMock.mockResolvedValue(openAiResponse(validBlueprint()));
+    const purposeTemplate = {
+      id: 'business-proposal', name: 'Business Proposal', description: 'Decision proposal.', documentType: 'proposal', presentationIntent: 'executive-proposal',
+      defaultOutline: ['Business context', 'Proposal value', 'Decision request'], compositionRules: ['Open with the business decision.'],
+    };
+
+    const result = await handler!(new Request('http://localhost', { method: 'POST', body: JSON.stringify({ request: { ...request.request, purposeTemplate } }) }));
+    const sent = JSON.parse(fetchMock.mock.calls[0][1].body) as { input: Array<{ content: Array<{ text: string }> }> };
+    const prompt = JSON.parse(sent.input[0].content[0].text) as { purposeTemplate: typeof purposeTemplate };
+
+    expect(result.status).toBe(200);
+    expect(prompt.purposeTemplate.defaultOutline).toContain('Proposal value');
+    expect(prompt.purposeTemplate.compositionRules).toContain('Open with the business decision.');
   });
 });

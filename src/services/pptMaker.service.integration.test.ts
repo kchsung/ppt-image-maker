@@ -72,7 +72,7 @@ function createSlide(pageNumber: number, totalSlides: number): SlidePlan {
     pageNumber,
     archetype,
     visualStructure,
-    title: `Decision Point ${pageNumber}`,
+    title: `Stage ${pageNumber} Makes the Next Decision Clear`,
     subtitle: 'A source-grounded view for the accountable operating model.',
     objective: 'Help the audience make a clear and accountable decision from the evidence.',
     mainMessage: `Stage ${pageNumber} turns available knowledge into a distinct decision, owner, and next action.`,
@@ -152,6 +152,8 @@ describe('pptMakerService remote planning scenario', () => {
       .toMatchObject([{ pageNumber: 10 }, { pageNumber: 20 }]);
     expect(deck.strategy).toEqual(blueprint.strategy);
     expect(deck.slides.map((slide) => slide.pageNumber)).toEqual(Array.from({ length: 30 }, (_, index) => index + 1));
+    expect(deck.slides[9].dependency?.nextQuestion).toBe(deck.slides[10].dependency?.questionAddressed);
+    expect(deck.slides.at(-1)?.dependency?.nextQuestion).toBeNull();
     expect(deck.slides.at(-1)?.visualStructure).toBe('closing-commitment');
     expect(deck.copyQa.status).toBe('passed');
   });

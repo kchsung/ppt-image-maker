@@ -7,15 +7,25 @@ import type {
   PptDeckBlueprint,
   PptDeckPlan,
   PptMakerRequest,
+  PptRequestAnalysis,
   SlidePlan,
 } from '@/types/models/pptMaker.model';
 import { createMockDeckPlan, createMockSlideImageDataUrl } from '@/mocks/pptMaker.mock';
 import {
   createSlideTitle,
+  compressDeckCopyForLayout,
+  deriveSlideDiagram,
+  deriveSlideComparisonTable,
+  deriveSlideChart,
+  deriveSlideKeyMetric,
+  getDeckCoverageSuggestions,
+  getDeckRedundancySuggestions,
   getDeckAssemblyQaIssues,
   extractKeywords,
+  linkSlideDependencies,
   getDeckCopyQaIssues,
   getVisualStructureDescription,
+  improveSlideTitle,
   selectArchetype,
   selectVisualStructure,
   splitIntoSlideSeeds,
@@ -24,6 +34,7 @@ import {
 } from '@/utils/pptMaker';
 import { getSupabaseFunctionErrorMessage } from '@/utils/supabaseFunctionError';
 import { mapWithConcurrency } from '@/utils/concurrency';
+import { createLocalPptRequestAnalysis } from '@/utils/pptRequestAnalysis';
 
 const SECTION_PLAN_CONCURRENCY = 2;
 
@@ -34,6 +45,8 @@ function createImagePrompt(request: PptMakerRequest, slide: Omit<SlidePlan, 'ima
     `Use ${request.styleReference.primaryColorLabel} as the primary color and ${request.styleReference.accentColorLabel} for emphasis.`,
     `Story role: ${slide.archetype}.`,
     `Required visual structure: ${slide.visualStructure}.`,
+    `Inferred diagram intent: ${slide.diagram?.type ?? 'none'}.`,
+    slide.diagram?.nodes.length ? `Diagram nodes: ${slide.diagram.nodes.join(', ')}.` : '',
     `Composition instruction: ${getVisualStructureDescription(slide.visualStructure)}`,
     `Image slot purpose: ${slide.imageSlot.purpose}.`,
     `Place the asset for a ${slide.imageSlot.placement} slot only.`,
@@ -47,6 +60,24 @@ function createImagePrompt(request: PptMakerRequest, slide: Omit<SlidePlan, 'ima
 }
 
 export const pptMakerService: PptMakerService = {
+  async analyzeRequest(request) {
+    if (!supabase) {
+      return createLocalPptRequestAnalysis(request);
+    }
+
+    const { data, error } = await supabase.functions.invoke<PptRequestAnalysis>('analyze-ppt-request', {
+      body: { request },
+    });
+
+    if (error) {
+      throw new Error(`PPT request analysis failed: ${await getSupabaseFunctionErrorMessage(error)}`);
+    }
+    if (!data?.topic || !data.purpose || !data.audience) {
+      throw new Error('PPT request analysis returned incomplete production conditions.');
+    }
+    return data;
+  },
+
   async generateDeckPlan(request) {
     if (supabase) {
       const blueprint = await generateDeckBlueprint(request);
@@ -68,16 +99,23 @@ export const pptMakerService: PptMakerService = {
           return generateSectionPlan(sectionRequest, section.title);
         },
       );
-      const slides = sectionPlans.flatMap((sectionPlan) => sectionPlan.slides);
+      const slides = linkSlideDependencies(sectionPlans.flatMap((sectionPlan) => sectionPlan.slides))
+        .map((slide) => ({
+          ...slide,
+          diagram: deriveSlideDiagram(slide),
+          comparisonTable: deriveSlideComparisonTable(slide),
+          chart: deriveSlideChart(slide),
+          keyMetric: deriveSlideKeyMetric(slide),
+        }));
 
-      const plan: PptDeckPlan = {
+      const plan = attachRedundancySuggestions(compressDeckCopyForLayout({
         id: `deck-${Date.now()}`,
         title: blueprint.title,
         createdAt: new Date().toISOString(),
         request,
         strategy: blueprint.strategy,
         blueprint,
-        slides: slides.sort((left, right) => left.pageNumber - right.pageNumber),
+        slides,
         copyQa: {
           status: 'passed',
           checks: [
@@ -87,7 +125,7 @@ export const pptMakerService: PptMakerService = {
           ],
           issues: [],
         },
-      };
+      } satisfies PptDeckPlan));
 
       const issues = [...getDeckAssemblyQaIssues(plan), ...getDeckCopyQaIssues(plan)];
       if (issues.length > 0) {
@@ -97,7 +135,7 @@ export const pptMakerService: PptMakerService = {
       return plan;
     }
 
-    return createLocalDemoDeckPlan(request);
+    return attachRedundancySuggestions(compressDeckCopyForLayout(createLocalDemoDeckPlan(request)));
   },
 
   async createGenerationJob(deckPlan) {
@@ -171,7 +209,7 @@ function createBlueprintHandoff(blueprint: PptDeckBlueprint, sectionIndex: numbe
       pageNumber: section.slideStart + section.slideCount - 1,
       title: section.title,
       mainMessage: section.keyMessage,
-      decision: section.purpose,
+      decision: section.keyQuestion ?? section.purpose,
     }));
 }
 
@@ -188,17 +226,40 @@ async function generateSectionPlan(request: PptMakerRequest, sectionTitle: strin
   if (!data) {
     throw new Error(`Slide copy planning returned no slides for section "${sectionTitle}".`);
   }
-  const plan = {
+  const plan = attachRedundancySuggestions(compressDeckCopyForLayout({
     ...data,
     id: data.id || `section-${request.planningBatch?.sectionId ?? Date.now()}`,
     createdAt: data.createdAt || new Date().toISOString(),
     request,
-  } satisfies PptDeckPlan;
+  } satisfies PptDeckPlan));
   const issues = getDeckCopyQaIssues(plan, 'section');
   if (issues.length > 0 || plan.copyQa.status !== 'passed') {
     throw new Error(issues[0] ?? plan.copyQa.issues[0] ?? `Slide copy did not pass quality validation for section "${sectionTitle}".`);
   }
   return plan;
+}
+
+function attachRedundancySuggestions(deckPlan: PptDeckPlan): PptDeckPlan {
+  const redundancySuggestions = getDeckRedundancySuggestions(deckPlan.slides);
+  const coverageSuggestions = getDeckCoverageSuggestions(deckPlan.slides);
+
+  return {
+    ...deckPlan,
+    copyQa: {
+      ...deckPlan.copyQa,
+      redundancySuggestions,
+      coverageSuggestions,
+      checks: [
+        ...deckPlan.copyQa.checks,
+        redundancySuggestions.length > 0
+          ? `Prepared ${redundancySuggestions.length} redundancy recommendation(s) for similar titles, messages, proof points, or diagrams.`
+          : 'No meaningful overlap was detected across slide titles, messages, proof points, or diagram structures.',
+        coverageSuggestions.length > 0
+          ? `Prepared ${coverageSuggestions.length} coverage recommendation(s) for missing solution, capability, KPI, or expected-impact content.`
+          : 'Problem, solution, capability, measurement, and expected-impact coverage is complete for the detected problem statements.',
+      ],
+    },
+  };
 }
 
 async function generateSlideWithRateLimitRetry(
@@ -256,7 +317,11 @@ function createLegacyLocalDemoDeckPlan(request: PptMakerRequest): PptDeckPlan {
       const rawLabels = extractKeywords(seed, archetype === 'cover' ? 3 : 5);
       const labels = rawLabels.map((label) => validateSlideText(label, request.targetLanguage)).filter(Boolean);
       const mainMessage = validateSlideText(summarizeText(seed, 140), request.targetLanguage);
-      const title = validateSlideText(createSlideTitle(seed, request.targetLanguage, pageNumber), request.targetLanguage);
+      const title = improveSlideTitle(
+        validateSlideText(createSlideTitle(seed, request.targetLanguage, pageNumber), request.targetLanguage),
+        mainMessage,
+        request.targetLanguage,
+      );
       const subtitle =
         request.targetLanguage === 'Korean'
           ? `${request.audience} 대상 ${request.purpose} 발표 자료`
