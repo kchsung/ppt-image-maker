@@ -114,3 +114,6 @@ npm run lint
 npm run test:run
 npm run build
 ```
+# External Integration
+
+For trusted server-to-server integrations, use the modular external API described in [PPT External API](ppt-external-api.md). It exposes request analysis, blueprinting, section-level planning, job persistence, PPTX upload, and output polling without exposing any OpenAI or Supabase service-role credentials to a browser.
